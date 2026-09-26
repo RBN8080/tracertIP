@@ -10,7 +10,9 @@ Group=tracertip
 SupplementaryGroups=video
 StateDirectory=tracertip-f0
 ExecStart=/usr/local/lib/tracertip-f0/recolectar.sh
-TimeoutStartSec=240
+# Menos que el periodo del timer (900 s): una corrida atorada no se encima
+# con la siguiente.
+TimeoutStartSec=840
 # Endurecimiento. NO se usa NoNewPrivileges=yes: anularia la capacidad de
 # archivo cap_net_raw de mtr-packet y mtr no podria abrir sockets
 # (capabilities(7)).

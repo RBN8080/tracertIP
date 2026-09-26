@@ -1,5 +1,6 @@
 # tracertIP - F0 - destinos de la recoleccion (plantilla)
-# Una IP por linea, solo destinos declarados: nunca rangos ni nombres. Maximo 5.
+# Una IP por linea, solo destinos declarados: nunca rangos ni nombres.
+# Caben tantos como permita PRESUPUESTO_S de recolectar.sh (hoy, 32).
 # La copia real vive fuera del repositorio (carpeta privada: nodo/destinos.conf)
 # y se instala en /etc/tracertip-f0/destinos.conf.
 192.0.2.10
