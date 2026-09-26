@@ -1,0 +1,19 @@
+[Unit]
+Description=tracertIP F0: una corrida de recoleccion (mtr JSON + salud del nodo)
+After=network-online.target time-sync.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=tracertip
+Group=tracertip
+SupplementaryGroups=video
+StateDirectory=tracertip-f0
+ExecStart=/usr/local/lib/tracertip-f0/recolectar.sh
+TimeoutStartSec=240
+# Endurecimiento. NO se usa NoNewPrivileges=yes: anularia la capacidad de
+# archivo cap_net_raw de mtr-packet y mtr no podria abrir sockets
+# (capabilities(7)).
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes

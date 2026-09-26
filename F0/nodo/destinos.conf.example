@@ -1,0 +1,7 @@
+# tracertIP - F0 - destinos de la recoleccion (plantilla)
+# Una IP por linea, solo destinos declarados: nunca rangos ni nombres. Maximo 5.
+# La copia real vive fuera del repositorio (carpeta privada: nodo/destinos.conf)
+# y se instala en /etc/tracertip-f0/destinos.conf.
+192.0.2.10
+198.51.100.20
+203.0.113.30

@@ -1,0 +1,10 @@
+[Unit]
+Description=tracertIP F0: recoleccion cada 5 min (ventana de 48 h)
+
+[Timer]
+OnCalendar=*:0/5
+AccuracySec=10s
+Unit=tracertip-f0-recoleccion.service
+
+[Install]
+WantedBy=timers.target
