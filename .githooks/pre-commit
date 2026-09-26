@@ -1,0 +1,75 @@
+#!/bin/sh
+# tracertIP - verificador de publicabilidad (00_IDEA.txt, 5.ter)
+#   git commit ................................ revisa lo preparado (staged)
+#   git hook run pre-commit -- --todo ......... todos los archivos versionados
+#   git hook run pre-commit -- --historial .... todo el historial
+# Capa 1: patrones genericos (este archivo, publico)
+# Capa 2: listas privadas, FUERA del repositorio
+# Capa 3: gitleaks (credenciales)
+# Falla cerrada: si faltan las listas o gitleaks, BLOQUEA (P5).
+# Los nombres de archivo del repositorio no llevan espacios (convencion).
+set -u
+
+MODO="${1:-staged}"
+RAIZ="$(git rev-parse --show-toplevel)" || exit 1
+PRIV="${TRACERTIP_PRIVADO:-$RAIZ/../_privado/09_tracertIP}"
+[ -f "$PRIV/denylist-palabras.txt" ] && [ -f "$PRIV/denylist-fragmentos.txt" ] || {
+  echo "BLOQUEADO: no encuentro las listas privadas en $PRIV" >&2; exit 1; }
+command -v gitleaks >/dev/null 2>&1 || {
+  echo "BLOQUEADO: falta gitleaks (paso 0.R)" >&2; exit 1; }
+
+# Listas sin CR ni lineas vacias (una linea vacia coincidiria con TODO)
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+for l in palabras fragmentos; do
+  tr -d '\r' < "$PRIV/denylist-$l.txt" | grep -v '^[[:space:]]*$' > "$TMP/$l"
+done
+
+case "$MODO" in
+  staged)
+    ARCHIVOS="$(git diff --cached --name-only --diff-filter=ACMR)"
+    [ -z "$ARCHIVOS" ] && exit 0
+    git grep --cached -n -I -e '' -- $ARCHIVOS > "$TMP/texto" ;;
+  --todo)
+    git grep --cached -n -I -e '' > "$TMP/texto" ;;
+  --historial)
+    git log -p --all --no-color --format='commit %H %ae' > "$TMP/texto" ;;
+  *) echo "uso: pre-commit [--todo | --historial]" >&2; exit 2 ;;
+esac
+
+HALLAZGOS=0
+revisar() {  # $1 = descripcion; el resto son argumentos de grep
+  d="$1"; shift
+  if grep "$@" "$TMP/texto" > "$TMP/hit"; then
+    echo "PUBLICABILIDAD - $d:" >&2; head -n 20 "$TMP/hit" >&2; HALLAZGOS=1
+  fi
+}
+
+# Capa 1: genericos. Las redes en notacion CIDR (x.x.x.x/nn) se permiten.
+revisar "IP de host privada o de CGNAT" -E \
+  '(^|[^0-9.])(10(\.[0-9]{1,3}){3}|172\.(1[6-9]|2[0-9]|3[01])(\.[0-9]{1,3}){2}|192\.168(\.[0-9]{1,3}){2}|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])(\.[0-9]{1,3}){2})([^0-9./]|$)'
+grep -E '([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}' "$TMP/texto" \
+  | grep -v -i -E '00[:-]00[:-]5e[:-]00[:-]53' > "$TMP/mac"
+[ -s "$TMP/mac" ] && { echo "PUBLICABILIDAD - MAC real:" >&2; head -n 20 "$TMP/mac" >&2; HALLAZGOS=1; }
+revisar "llave privada" -E -- '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+revisar "token en URL" -E '[?&](token|key|apikey|api_key)=[A-Za-z0-9_-]{8,}'
+revisar "ruta de usuario" -E '[A-Za-z]:\\Users\\[A-Za-z0-9._-]+|/home/[a-z]'
+grep -E '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' "$TMP/texto" \
+  | grep -v -E '@users\.noreply\.github\.com|@example\.(com|org|net)' > "$TMP/mail"
+[ -s "$TMP/mail" ] && { echo "PUBLICABILIDAD - correo:" >&2; head -n 20 "$TMP/mail" >&2; HALLAZGOS=1; }
+
+# Capa 2: listas privadas
+revisar "termino privado (palabra)" -i -w -F -f "$TMP/palabras"
+revisar "fragmento privado" -i -F -f "$TMP/fragmentos"
+
+# Capa 3: gitleaks
+case "$MODO" in
+  staged)      gitleaks git --pre-commit --staged --redact --no-banner >&2 || HALLAZGOS=1 ;;
+  --todo)      gitleaks dir "$RAIZ" --redact --no-banner >&2 || HALLAZGOS=1 ;;
+  --historial) gitleaks git "$RAIZ" --redact --no-banner >&2 || HALLAZGOS=1 ;;
+esac
+
+if [ "$HALLAZGOS" -ne 0 ]; then
+  echo "BLOQUEADO: corrige el contenido; --no-verify esta prohibido (5.ter)." >&2
+  exit 1
+fi
+exit 0

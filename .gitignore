@@ -1,0 +1,16 @@
+# Defensa en profundidad: lo privado vive FUERA del repositorio
+# (../_privado/). Si algo se copia aqui por error, git lo ignora.
+privado/
+_privado/
+datos/
+*.pcap
+*.pcapng
+*.etl
+*.jsonl
+# ...salvo los datos de prueba SINTETICOS (valores de documentacion)
+!F0/analisis/testdata/*.jsonl
+.env
+.env.*
+# Binarios
+*.exe
+F0/analisis/analisis
