@@ -2,7 +2,18 @@
 
 **Telemetría en vivo del camino hacia una IP.** Muestra por qué redes pasa el tráfico, en qué tramo se va el tiempo y qué dice la física (la velocidad de la luz en la fibra) de cada salto.
 
-> **Estado: Fase 0, verificación.** Todavía no hay nada que instalar. Este repositorio solo contiene lo estructural: código, scripts y plantillas que sirven en cualquier red.
+> **Estado: Fase 0, verificación.** Aún no hay producto. Este repositorio solo contiene lo estructural: código, scripts y plantillas que sirven en cualquier red.
+
+## Qué hay hoy
+
+`F0/nodo/` contiene lo que corre en el equipo de medición durante la Fase 0 (48 h de datos antes de construir):
+
+| Archivo | Qué hace |
+|---|---|
+| `recolectar.sh` + `.service` + `.timer` | Cada 15 min traza en secuencia los destinos declarados con `mtr --json` y toma la salud del equipo cada 5 min |
+| `vigilar.sh` + `.service` + `.timer` | Revisa cada corrida y alerta si el acceso (router y CGNAT) deja de contestar, si varios destinos pierden paquetes a la vez, si una corrida queda incompleta o si el equipo se calienta |
+| `nftables.conf` | Cortafuegos del equipo: entrada cerrada salvo lo necesario |
+| `*.example` | Plantillas de los ajustes de cada red (destinos, red local) |
 
 ## Qué hace, y qué no
 
@@ -48,4 +59,4 @@ MIT. Ver `LICENSE`.
 
 ---
 
-*Actualizado: 2026-09-26 17:09 UTC.*
+*Actualizado: 2026-09-26 19:52 UTC.*
