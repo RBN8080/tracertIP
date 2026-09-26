@@ -25,6 +25,7 @@
 
 - Un equipo Linux siempre encendido, con `systemd` y `nftables`.
 - Go, para compilar.
+- Para `F0/nodo/`: `mtr` 0.96 o posterior y `jq`.
 
 Lo que depende de cada instalación (red local, direcciones, destinos) va en archivos de ajustes, con un `.example` como plantilla.
 
@@ -59,4 +60,4 @@ MIT. Ver `LICENSE`.
 
 ---
 
-*Actualizado: 2026-09-26 19:52 UTC.*
+*Actualizado: 2026-09-26 20:10 UTC.*
