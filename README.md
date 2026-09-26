@@ -15,6 +15,8 @@
 | `nftables.conf` | Cortafuegos del equipo: entrada cerrada salvo lo necesario |
 | `*.example` | Plantillas de los ajustes de cada red (destinos, red local) |
 
+`F0/analisis/` (Go, solo la biblioteca estándar) analiza esos datos al cerrar la ventana: cambios de ruta por red (ASN), variación de la latencia, salud del equipo y cruce con los anuncios BGP que ve RIPE RIS. Escribe un informe con el veredicto de la fase. Sus pruebas usan solo datos inventados.
+
 ## Qué hace, y qué no
 
 - Traza de forma continua **solo destinos declarados**, uno por uno y con una tasa acotada. **No escanea**: ni barridos de rangos ni listas de puertos.
@@ -60,4 +62,4 @@ MIT. Ver `LICENSE`.
 
 ---
 
-*Actualizado: 2026-09-26 20:10 UTC.*
+*Actualizado: 2026-09-26 22:32 UTC.*
