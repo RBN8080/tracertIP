@@ -1,0 +1,12 @@
+[Unit]
+Description=tracertIP F0: vigia 14.5 min despues de cada inicio de corrida
+
+[Timer]
+# La corrida empieza en :00/:15/:30/:45 y su plazo la corta a los 14 min: a los
+# 14.5 min ya termino siempre.
+OnCalendar=*:14/15:30
+AccuracySec=10s
+Unit=tracertip-f0-vigia.service
+
+[Install]
+WantedBy=timers.target

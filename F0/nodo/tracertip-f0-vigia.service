@@ -1,0 +1,19 @@
+[Unit]
+Description=tracertIP F0: vigia de la ultima corrida (acceso, destinos, instrumento y nodo)
+After=time-sync.target
+
+[Service]
+Type=oneshot
+User=tracertip
+Group=tracertip
+StateDirectory=tracertip-f0
+# Opcional: AVISO_URL=... para recibir las alertas fuera del nodo. Lo lee
+# systemd antes de bajar privilegios; el archivo puede ser solo de root.
+EnvironmentFile=-/etc/tracertip-f0/aviso.conf
+ExecStart=/usr/local/lib/tracertip-f0/vigilar.sh
+TimeoutStartSec=120
+# Solo lee datos: no necesita capacidades.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
