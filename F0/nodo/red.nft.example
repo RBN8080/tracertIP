@@ -1,0 +1,4 @@
+# tracertIP - nodo - red local de UNA instalacion (plantilla)
+# Copiar FUERA del repositorio, a la carpeta privada, como nodo/red.nft, y
+# poner la red real. El despliegue toma de ahi la linea "define LAN4".
+define LAN4 = 192.0.2.0/24
