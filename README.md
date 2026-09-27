@@ -17,6 +17,18 @@
 
 `F0/analisis/` (Go, solo la biblioteca estándar) analiza esos datos al cerrar la ventana: cambios de ruta por red (ASN), variación de la latencia, salud del equipo y cruce con los anuncios BGP que ve RIPE RIS. Escribe un informe con el veredicto de la fase. Sus pruebas usan solo datos inventados.
 
+`F0/monitor/` abre por SSH, cada una en su ventana, vistas de solo lectura del equipo de medición:
+- procesos;
+- un tablero con temperatura, ventilador, corrida en curso y veredictos del vigía;
+- caudal;
+- el tráfico que no es la sonda;
+- sockets por proceso;
+- avisos del sistema;
+- el diario de la recolección;
+- errores de la interfaz.
+
+`monitor.ps1` (Windows Terminal) despliega `monitor.sh` en el equipo si su SHA-256 no coincide.
+
 ## Qué hace, y qué no
 
 - Traza de forma continua **solo destinos declarados**, uno por uno y con una tasa acotada. **No escanea**: ni barridos de rangos ni listas de puertos.
@@ -28,6 +40,7 @@
 - Un equipo Linux siempre encendido, con `systemd` y `nftables`.
 - Go, para compilar.
 - Para `F0/nodo/`: `mtr` 0.96 o posterior y `jq`.
+- Para `F0/monitor/`: `htop`, `nload`, `tcpdump`, `sysstat` y `watch` en el equipo; Windows Terminal en el PC.
 
 Lo que depende de cada instalación (red local, direcciones, destinos) va en archivos de ajustes, con un `.example` como plantilla.
 
@@ -62,4 +75,4 @@ MIT. Ver `LICENSE`.
 
 ---
 
-*Actualizado: 2026-09-26 22:32 UTC.*
+*Actualizado: 2026-09-27 15:40 UTC.*
