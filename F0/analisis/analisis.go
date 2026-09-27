@@ -75,6 +75,10 @@ func analizar(privado string, inicio time.Time, bgp fuenteBGP) (*informe, error)
 	if err != nil {
 		return nil, err
 	}
+	origen, ubic, err := leerUbicaciones(privado)
+	if err != nil {
+		return nil, err
+	}
 	dir := filepath.Join(privado, "datos", "recoleccion")
 	trazas, lm, err := leerTrazas(filepath.Join(dir, "mtr-*.jsonl"), inicio, fin)
 	if err != nil {
@@ -125,7 +129,10 @@ func analizar(privado string, inicio time.Time, bgp fuenteBGP) (*informe, error)
 		if len(inf.Grupos) == 0 || inf.Grupos[len(inf.Grupos)-1] != d.Grupo {
 			inf.Grupos = append(inf.Grupos, d.Grupo)
 		}
-		inf.Destinos = append(inf.Destinos, estadisticas(d, porDestino[d.IP], asn, asnAcceso, inf.Cob.Ranuras))
+		e := estadisticas(d, porDestino[d.IP], asn, asnAcceso, inf.Cob.Ranuras)
+		u, conUbic := ubic[d.IP]
+		e.Fisica = limiteFisico(e.BestMin, e.HayRTT, origen, u, conUbic)
+		inf.Destinos = append(inf.Destinos, e)
 	}
 	if bgp != nil {
 		if err := consultarBGP(bgp, inf, inicio, fin); err != nil {
@@ -340,6 +347,7 @@ type estadDestino struct {
 	Origen                        []int
 	Anuncios, Retiros             int
 	FinBGP                        time.Time
+	Fisica                        fisica
 }
 
 // estadisticas de un destino. "Consecutivas" = consecutivas entre las

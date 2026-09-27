@@ -36,6 +36,10 @@ func carpetaPrivada(t *testing.T, inicio time.Time, cambio, caliente bool) strin
 	escribir(t, filepath.Join(priv, "inventario.txt"), "   ISP .................. Ejemplo, AS64500   [medido]\n")
 	escribir(t, filepath.Join(priv, "nodo", "destinos.conf"),
 		"# -- originales (punto de aborto)\n192.0.2.10\n192.0.2.20\n# -- Europa\n198.51.100.30\n")
+	// Limite fisico: 192.0.2.10 en las antipodas (imposible a ~100 ms), 192.0.2.20
+	// a 10 grados (posible) y 198.51.100.30 sin ubicacion declarada (NA).
+	escribir(t, filepath.Join(priv, "origen.json"), `{"lat":0,"lon":0}`)
+	escribir(t, filepath.Join(priv, "ubicaciones.tsv"), "192.0.2.10\t0,180\tprueba\n192.0.2.20\t0,10\tprueba\n")
 	escribirGz(t, filepath.Join(priv, "datos", "ipinfo", "ipinfo_lite.csv.gz"), encIPinfo+
 		"203.0.113.0/26,Ejemplo,EX,Ejemplo,EX,AS64500,Acceso de ejemplo,example.com\n"+
 		"203.0.113.64/26,Ejemplo,EX,Ejemplo,EX,AS64501,Transito A,example.com\n"+
@@ -144,12 +148,15 @@ func TestAnalizarDePuntaAPunta(t *testing.T) {
 			if d1.Anuncios != 1 || d3.Anuncios != 0 || !inf.FinBGP.Equal(bgp.fin) {
 				t.Errorf("BGP: anuncios %d y %d, fin %v", d1.Anuncios, d3.Anuncios, inf.FinBGP)
 			}
+			if !d1.Fisica.Imposible() || !d2.Fisica.Evaluable || d2.Fisica.Imposible() || d3.Fisica.Evaluable {
+				t.Errorf("limite fisico: %+v, %+v, %+v", d1.Fisica, d2.Fisica, d3.Fisica)
+			}
 			v := inf.Veredicto
 			if v.Originales != 2 || v.Cambios != c.cambios || v.Aborto != c.aborto || v.Enfriamiento != c.enfriar || v.JitterMax >= umbralJitterMs {
 				t.Errorf("veredicto %+v", v)
 			}
 			md := inf.markdown()
-			for _, s := range []string{c.consecuencia, c.frio, "### originales (punto de aborto)", "| AS64511 | Destino Europa |", "corrida incompleta: 2 de 3 trazas"} {
+			for _, s := range []string{c.consecuencia, c.frio, "### originales (punto de aborto)", "| AS64511 | Destino Europa |", "corrida incompleta: 2 de 3 trazas", "⛔ imposible"} {
 				if !strings.Contains(md, s) {
 					t.Errorf("el informe no dice %q", s)
 				}

@@ -114,15 +114,15 @@ func (inf *informe) markdown() string {
 	p("- Reinicios: el análisis no los ve; van en la bitácora (`journalctl --list-boots`).\n\n")
 
 	p("## 2. Por destino\n\n")
-	p("RTT = `Avg` del salto destino en cada traza válida; p50 y p95 por rango más cercano. «No llegó» = trazas no válidas entre las obtenidas. Mudos = saltos `???` entre todos los saltos de las trazas válidas. La ruta es la huella ASN, sin el lado de la casa.\n\n")
+	p("RTT = `Avg` del salto destino en cada traza válida; p50 y p95 por rango más cercano. «No llegó» = trazas no válidas entre las obtenidas. Mudos = saltos `???` entre todos los saltos de las trazas válidas. La ruta es la huella ASN, sin el lado de la casa. Límite físico = Best mín ÷ el RTT mínimo hasta la ubicación declarada (`ubicaciones.tsv`) a %.1f km/ms; menos de ×1 es imposible (proxy, anycast o ubicación falsa). Solo delata un servidor más cerca de lo declarado.\n\n", velFibraKmMs)
 	for _, g := range inf.Grupos {
 		if g == grupoAborto {
 			p("### %s (punto de aborto)\n\n", g)
 		} else {
 			p("### %s\n\n", g)
 		}
-		p("| Destino | Válidas | No llegó | p50 ms | p95 ms | p95−p50 | Best mín | Cambios ASN | Cambios IP | Prevalencia | Mudos | Ruta dominante |\n")
-		p("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+		p("| Destino | Válidas | No llegó | p50 ms | p95 ms | p95−p50 | Best mín | Cambios ASN | Cambios IP | Prevalencia | Mudos | Límite físico | Ruta dominante |\n")
+		p("|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 		for _, e := range inf.Destinos {
 			if e.Grupo != g {
 				continue
@@ -131,10 +131,17 @@ func (inf *informe) markdown() string {
 			if n := contarArtefactos(e.Cambios); n > 0 {
 				cambios += fmt.Sprintf(" (%d art.)", n)
 			}
-			p("| %s | %d/%d | %s | %s | %s | %s | %s | %s | %d | %s | %s | `%s` |\n",
+			fis := "NA"
+			if f := e.Fisica; f.Evaluable {
+				fis = fmt.Sprintf("×%.2f (%.0f km)", f.Razon, f.Km)
+				if f.Imposible() {
+					fis = "⛔ imposible " + fis
+				}
+			}
+			p("| %s | %d/%d | %s | %s | %s | %s | %s | %s | %d | %s | %s | %s | `%s` |\n",
 				e.IP, e.Validas, e.Esperadas, pct(e.Obtenidas-e.Validas, e.Obtenidas),
 				ms(e.P50, e.HayRTT), ms(e.P95, e.HayRTT), ms(e.P95-e.P50, e.HayRTT), ms(e.BestMin, e.HayRTT),
-				cambios, e.CambiosIP, pct(int(e.Prevalencia*float64(e.Validas)+0.5), e.Validas), pct(e.Mudos, e.Saltos), e.RutaDominante)
+				cambios, e.CambiosIP, pct(int(e.Prevalencia*float64(e.Validas)+0.5), e.Validas), pct(e.Mudos, e.Saltos), fis, e.RutaDominante)
 		}
 		p("\n")
 	}
