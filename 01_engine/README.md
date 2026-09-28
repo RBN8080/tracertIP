@@ -8,6 +8,6 @@ Probe → enrich → judge → output (console table and JSON).
 - **It grows in place:** a one-shot CLI first (Phase 1), then live telemetry (Phase 2): continuous mode, route changes as events, a LAN-only API and a web dashboard embedded in the binary. A Java desktop client comes later, on the same API.
 - Built and tuned with the real data from `00_verification`.
 
-**Status:** next. Only planned engine work goes here.
+**Status:** in progress (Phase 1). Only planned engine work goes here.
 
-*Updated: 2026-09-28 18:54 UTC.*
+*Updated: 2026-09-28 23:40 UTC.*

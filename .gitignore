@@ -14,3 +14,5 @@ datos/
 # Binaries
 *.exe
 00_verification/analysis/analysis
+/tracertip
+/bin/

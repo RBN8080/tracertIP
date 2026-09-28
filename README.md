@@ -2,7 +2,7 @@
 
 **Live telemetry of the path to an IP.** It shows which networks the traffic crosses, where along the path the time goes, and what physics (the speed of light in fiber) says about each hop.
 
-> **Status: Phase 0, verification.** No product yet. This repository holds only structural material: code, scripts and templates that work on any network.
+> **Status: Phase 1, building the engine.** Phase 0 closed on 2026-09-28. This repository holds only structural material: code, scripts and templates that work on any network.
 
 ## Layout
 
@@ -10,8 +10,8 @@ One folder per piece, in order. Only `01_engine/` is production code; `00_` and 
 
 | Folder | What it is | Status |
 |---|---|---|
-| `00_verification/` | Study: 48 h of real data and the verdict on whether to build | Closes 2026-09-28 |
-| `01_engine/` | Product: traces and judges every hop; grows into live telemetry | Next |
+| `00_verification/` | Study: 48 h of real data and the verdict on whether to build | Closed 2026-09-28 |
+| `01_engine/` | Product: traces and judges every hop; grows into live telemetry | In progress |
 | `02_observation/` | Study: the engine running untouched for at least 14 days | Pending |
 
 ## What is here today
@@ -48,7 +48,7 @@ One folder per piece, in order. Only `01_engine/` is production code; `00_` and 
 ## Expected requirements
 
 - A Linux host that is always on, with `systemd` and `nftables`.
-- Go, to build.
+- Go 1.27 or later, to build: `go build -trimpath -o bin/tracertip ./01_engine/cmd/tracertip` (for the node, add `GOOS=linux GOARCH=arm64 CGO_ENABLED=0`).
 - For `00_verification/node/`: `mtr` 0.96 or later, and `jq`.
 - For `00_verification/monitor/`: `htop`, `nload`, `tcpdump`, `sysstat` and `watch` on the host; Windows Terminal on the PC.
 
@@ -85,4 +85,4 @@ MIT. See `LICENSE`.
 
 ---
 
-*Updated: 2026-09-28 18:54 UTC.*
+*Updated: 2026-09-28 23:40 UTC.*
