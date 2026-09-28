@@ -1,7 +1,7 @@
 #!/bin/sh
 # tracertIP - F0 - vistas de monitoreo del nodo, una por ventana.
 # Solo lectura: procesos, interfaz, sockets, sensores y diario. No toca la
-# recoleccion ni el cortafuegos. Lo despliega y lo abre 00_verificacion/monitor/monitor.ps1
+# recoleccion ni el cortafuegos. Lo despliega y lo abre 00_verification/monitor/monitor.ps1
 # desde el PC; en el nodo tambien sirve a mano: sh ~/tracertip-monitor.sh <vista>
 # Salir de cada vista con Ctrl+C.
 set -u

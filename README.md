@@ -1,90 +1,88 @@
 # tracertIP
 
-**Telemetría en vivo del camino hacia una IP.** Muestra por qué redes pasa el tráfico, en qué tramo se va el tiempo y qué dice la física (la velocidad de la luz en la fibra) de cada salto.
+**Live telemetry of the path to an IP.** It shows which networks the traffic crosses, where along the path the time goes, and what physics (the speed of light in fiber) says about each hop.
 
-> **Estado: Fase 0, verificación.** Aún no hay producto. Este repositorio solo contiene lo estructural: código, scripts y plantillas que sirven en cualquier red.
+> **Status: Phase 0, verification.** No product yet. This repository holds only structural material: code, scripts and templates that work on any network.
 
-## Estructura
+## Layout
 
-Una carpeta por etapa, en orden; cada una explica en su `README.md` qué hace y qué entrega a la siguiente.
+One folder per piece, in order. Only `01_engine/` is production code; `00_` and `02_` are studies that test it. Each folder's `README.md` says what it does and what it feeds.
 
-| Carpeta | Qué es | Estado |
+| Folder | What it is | Status |
 |---|---|---|
-| `00_verificacion/` | 48 h de datos reales y el veredicto de si vale la pena construir | Cierra el 2026-09-28 |
-| `01_motor/` | El programa central: traza y juzga cada salto | Siguiente |
-| `02_destinos/` | Elige y mantiene los destinos del estudio, sin proxies | Pendiente |
-| `03_observacion/` | El motor, sin tocarlo, durante al menos 14 días | Pendiente |
-| `04_telemetria/` | El motor en vivo, con API y pantallas | Pendiente |
+| `00_verification/` | Study: 48 h of real data and the verdict on whether to build | Closes 2026-09-28 |
+| `01_engine/` | Product: traces and judges every hop; grows into live telemetry | Next |
+| `02_observation/` | Study: the engine running untouched for at least 14 days | Pending |
 
-## Qué hay hoy
+## What is here today
 
-`00_verificacion/nodo/` contiene lo que corre en el equipo de medición durante la Fase 0 (48 h de datos antes de construir):
+`00_verification/node/` holds what runs on the measurement host during Phase 0 (48 h of data before building):
 
-| Archivo | Qué hace |
+| File | What it does |
 |---|---|
-| `recolectar.sh` + `.service` + `.timer` | Cada 15 min traza en secuencia los destinos declarados con `mtr --json` y toma la salud del equipo cada 5 min |
-| `vigilar.sh` + `.service` + `.timer` | Revisa cada corrida y alerta si el acceso (router y CGNAT) deja de contestar, si varios destinos pierden paquetes a la vez, si una corrida queda incompleta o si el equipo se calienta |
-| `nftables.conf` | Cortafuegos del equipo: entrada cerrada salvo lo necesario |
-| `*.example` | Plantillas de los ajustes de cada red (destinos, red local) |
+| `recolectar.sh` + `.service` + `.timer` | Every 15 min, traces the declared targets in sequence with `mtr --json`, and samples host health every 5 min |
+| `vigilar.sh` + `.service` + `.timer` | Checks each run and alerts if access (router and CGNAT) stops answering, if several targets lose packets at once, if a run is incomplete or if the host overheats |
+| `nftables.conf` | Host firewall: inbound closed except what is needed |
+| `*.example` | Templates for per-network settings (targets, local network) |
 
-`00_verificacion/analisis/` (Go, solo la biblioteca estándar) analiza esos datos al cerrar la ventana: cambios de ruta por red (ASN), variación de la latencia, salud del equipo y cruce con los anuncios BGP que ve RIPE RIS. Escribe un informe con el veredicto de la fase. Sus pruebas usan solo datos inventados.
+`00_verification/analysis/` (Go, standard library only) analyzes that data when the window closes: route changes by network (ASN), latency variation, host health, and a cross-check with the BGP announcements seen by RIPE RIS. It writes a report with the phase verdict. Its tests use made-up data only.
 
-`00_verificacion/monitor/` abre por SSH, cada una en su ventana, vistas de solo lectura del equipo de medición:
-- procesos;
-- un tablero con temperatura, ventilador, corrida en curso y veredictos del vigía;
-- caudal;
-- el tráfico que no es la sonda;
-- sockets por proceso;
-- avisos del sistema;
-- el diario de la recolección;
-- errores de la interfaz.
+`00_verification/monitor/` opens read-only views of the measurement host over SSH, each in its own window:
+- processes;
+- a dashboard with temperature, fan, current run and watchdog verdicts;
+- throughput;
+- traffic that is not the probe;
+- sockets per process;
+- system warnings;
+- the collection log;
+- interface errors.
 
-`monitor.ps1` (Windows Terminal) despliega `monitor.sh` en el equipo si su SHA-256 no coincide.
+`monitor.ps1` (Windows Terminal) deploys `monitor.sh` to the host if its SHA-256 does not match.
 
-## Qué hace, y qué no
+## What it does, and what it does not
 
-- Traza de forma continua **solo destinos declarados**, uno por uno y con una tasa acotada. **No escanea**: ni barridos de rangos ni listas de puertos.
-- Reúne en una sola vista los saltos y sus redes (ASN), la geografía, los cruces oceánicos, la historia de la ruta con sus cambios y cuántos milisegundos aporta cada tramo.
-- Usa la física como juez: una ubicación que viola la velocidad de la luz se marca como imposible.
+- It continuously traces **declared targets only**, one at a time and at a bounded rate. **It does not scan**: no range sweeps, no port lists.
+- It gathers in one view the hops and their networks (ASN), the geography, ocean crossings, the route history with its changes, and how many milliseconds each segment adds.
+- It uses physics as the judge: a location that violates the speed of light is flagged as impossible.
 
-## Requisitos previstos
+## Expected requirements
 
-- Un equipo Linux siempre encendido, con `systemd` y `nftables`.
-- Go, para compilar.
-- Para `00_verificacion/nodo/`: `mtr` 0.96 o posterior y `jq`.
-- Para `00_verificacion/monitor/`: `htop`, `nload`, `tcpdump`, `sysstat` y `watch` en el equipo; Windows Terminal en el PC.
+- A Linux host that is always on, with `systemd` and `nftables`.
+- Go, to build.
+- For `00_verification/node/`: `mtr` 0.96 or later, and `jq`.
+- For `00_verification/monitor/`: `htop`, `nload`, `tcpdump`, `sysstat` and `watch` on the host; Windows Terminal on the PC.
 
-Lo que depende de cada instalación (red local, direcciones, destinos) va en archivos de ajustes, con un `.example` como plantilla.
+Whatever depends on each installation (local network, addresses, targets) goes in settings files, with an `.example` template.
 
-## Privacidad
+## Privacy
 
-Aquí no hay datos de ninguna red concreta. Los ejemplos usan rangos reservados para documentación (RFC 5737, RFC 3849, RFC 7042 y RFC 2606).
+There is no data from any specific network here. Examples use ranges reserved for documentation (RFC 5737, RFC 3849, RFC 7042 and RFC 2606).
 
-Cada commit pasa por un verificador, `.githooks/pre-commit`, que:
+Every commit goes through a checker, `.githooks/pre-commit`, which:
 
-- busca IP de host privadas, MAC, llaves, tokens, rutas de usuario y correos;
-- compara el contenido contra listas privadas de términos, que viven fuera del repositorio;
-- corre [gitleaks](https://github.com/gitleaks/gitleaks).
+- looks for private host IPs, MACs, keys, tokens, user paths and e-mail addresses;
+- matches the content against private term lists that live outside the repository;
+- runs [gitleaks](https://github.com/gitleaks/gitleaks).
 
-Si faltan las listas o gitleaks, bloquea el commit.
+If the lists or gitleaks are missing, it blocks the commit.
 
 ```sh
 git config core.hooksPath .githooks
 ```
 
-## Datos de terceros
+## Third-party data
 
-No se redistribuyen: cada instalación los descarga y acepta sus términos.
+Not redistributed: each installation downloads it and accepts its terms.
 
 - IPinfo Lite — CC BY-SA 4.0
 - [IP Geolocation by DB-IP](https://db-ip.com) — CC BY 4.0
-- TeleGeography Submarine Cable Map — CC BY-NC-SA 3.0 (**uso no comercial**)
-- Natural Earth — dominio público
+- TeleGeography Submarine Cable Map — CC BY-NC-SA 3.0 (**non-commercial use**)
+- Natural Earth — public domain
 
-## Licencia
+## License
 
-MIT. Ver `LICENSE`.
+MIT. See `LICENSE`.
 
 ---
 
-*Actualizado: 2026-09-28 18:45 UTC.*
+*Updated: 2026-09-28 18:54 UTC.*

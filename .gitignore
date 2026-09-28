@@ -1,5 +1,5 @@
-# Defensa en profundidad: lo privado vive FUERA del repositorio
-# (../_privado/). Si algo se copia aqui por error, git lo ignora.
+# Defense in depth: private data lives OUTSIDE the repository
+# (../_privado/). If something is copied here by mistake, git ignores it.
 privado/
 _privado/
 datos/
@@ -7,10 +7,10 @@ datos/
 *.pcapng
 *.etl
 *.jsonl
-# ...salvo los datos de prueba SINTETICOS (valores de documentacion)
-!00_verificacion/analisis/testdata/*.jsonl
+# ...except SYNTHETIC test data (documentation values)
+!00_verification/analysis/testdata/*.jsonl
 .env
 .env.*
-# Binarios
+# Binaries
 *.exe
-00_verificacion/analisis/analisis
+00_verification/analysis/analysis

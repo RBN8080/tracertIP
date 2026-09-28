@@ -70,7 +70,7 @@ func (inf *informe) markdown() string {
 
 	p("# tracertIP — Resultados de la Fase 0\n\n")
 	p("| Campo | Valor |\n|---|---|\n")
-	p("| **Generado** | %s, por `00_verificacion/analisis` (paso 0.5) |\n", fechaHora(inf.Generado))
+	p("| **Generado** | %s, por `00_verification/analysis` (paso 0.5) |\n", fechaHora(inf.Generado))
 	p("| **Ventana** | %s a %s |\n", fechaHora(c.Inicio), fechaHora(c.Fin))
 	p("| **Datos** | `mtr`: %d líneas en %d archivos · salud: %d · vigía: %d · ilegibles: %d |\n",
 		c.Mtr.Lineas, c.Mtr.Archivos, c.Salud.Lineas, c.Vigia.Lineas, c.Mtr.Ilegibles+c.Salud.Ilegibles+c.Vigia.Ilegibles)

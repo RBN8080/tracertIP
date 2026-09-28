@@ -4,9 +4,9 @@ ventana de Windows Terminal, por SSH. Antes despliega monitor.sh en el nodo
 (~/tracertip-monitor.sh) si la copia no coincide por SHA-256 (P1: nada se
 edita a mano en el nodo).
 
-  .\00_verificacion\monitor\monitor.ps1 -Nodo <alias ssh>                 # vistas por omision
-  .\00_verificacion\monitor\monitor.ps1 -Nodo <alias> -Vistas diario,red  # solo esas
-  .\00_verificacion\monitor\monitor.ps1 -Nodo <alias> -WhatIf             # muestra, no abre
+  .\00_verification\monitor\monitor.ps1 -Nodo <alias ssh>                 # vistas por omision
+  .\00_verification\monitor\monitor.ps1 -Nodo <alias> -Vistas diario,red  # solo esas
+  .\00_verification\monitor\monitor.ps1 -Nodo <alias> -WhatIf             # muestra, no abre
 
 El alias sale de -Nodo o de la variable de entorno TRACERTIP_NODO (P4).
 #>

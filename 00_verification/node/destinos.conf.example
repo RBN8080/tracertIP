@@ -4,7 +4,7 @@
 # La copia real vive fuera del repositorio (carpeta privada: nodo/destinos.conf)
 # y se instala en /etc/tracertip-f0/destinos.conf.
 # Grupos: una linea "# -- <grupo>" agrupa las IP que la siguen (lo que va
-# despues de " (" es comentario). 00_verificacion/analisis decide el punto de aborto sobre
+# despues de " (" es comentario). 00_verification/analysis decide el punto de aborto sobre
 # el grupo "originales" y agrupa la tabla del informe por grupo.
 # -- originales (punto de aborto)
 192.0.2.10
