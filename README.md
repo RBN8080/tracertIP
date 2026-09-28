@@ -4,9 +4,21 @@
 
 > **Estado: Fase 0, verificación.** Aún no hay producto. Este repositorio solo contiene lo estructural: código, scripts y plantillas que sirven en cualquier red.
 
+## Estructura
+
+Una carpeta por etapa, en orden; cada una explica en su `README.md` qué hace y qué entrega a la siguiente.
+
+| Carpeta | Qué es | Estado |
+|---|---|---|
+| `00_verificacion/` | 48 h de datos reales y el veredicto de si vale la pena construir | Cierra el 2026-09-28 |
+| `01_motor/` | El programa central: traza y juzga cada salto | Siguiente |
+| `02_destinos/` | Elige y mantiene los destinos del estudio, sin proxies | Pendiente |
+| `03_observacion/` | El motor, sin tocarlo, durante al menos 14 días | Pendiente |
+| `04_telemetria/` | El motor en vivo, con API y pantallas | Pendiente |
+
 ## Qué hay hoy
 
-`F0/nodo/` contiene lo que corre en el equipo de medición durante la Fase 0 (48 h de datos antes de construir):
+`00_verificacion/nodo/` contiene lo que corre en el equipo de medición durante la Fase 0 (48 h de datos antes de construir):
 
 | Archivo | Qué hace |
 |---|---|
@@ -15,9 +27,9 @@
 | `nftables.conf` | Cortafuegos del equipo: entrada cerrada salvo lo necesario |
 | `*.example` | Plantillas de los ajustes de cada red (destinos, red local) |
 
-`F0/analisis/` (Go, solo la biblioteca estándar) analiza esos datos al cerrar la ventana: cambios de ruta por red (ASN), variación de la latencia, salud del equipo y cruce con los anuncios BGP que ve RIPE RIS. Escribe un informe con el veredicto de la fase. Sus pruebas usan solo datos inventados.
+`00_verificacion/analisis/` (Go, solo la biblioteca estándar) analiza esos datos al cerrar la ventana: cambios de ruta por red (ASN), variación de la latencia, salud del equipo y cruce con los anuncios BGP que ve RIPE RIS. Escribe un informe con el veredicto de la fase. Sus pruebas usan solo datos inventados.
 
-`F0/monitor/` abre por SSH, cada una en su ventana, vistas de solo lectura del equipo de medición:
+`00_verificacion/monitor/` abre por SSH, cada una en su ventana, vistas de solo lectura del equipo de medición:
 - procesos;
 - un tablero con temperatura, ventilador, corrida en curso y veredictos del vigía;
 - caudal;
@@ -39,8 +51,8 @@
 
 - Un equipo Linux siempre encendido, con `systemd` y `nftables`.
 - Go, para compilar.
-- Para `F0/nodo/`: `mtr` 0.96 o posterior y `jq`.
-- Para `F0/monitor/`: `htop`, `nload`, `tcpdump`, `sysstat` y `watch` en el equipo; Windows Terminal en el PC.
+- Para `00_verificacion/nodo/`: `mtr` 0.96 o posterior y `jq`.
+- Para `00_verificacion/monitor/`: `htop`, `nload`, `tcpdump`, `sysstat` y `watch` en el equipo; Windows Terminal en el PC.
 
 Lo que depende de cada instalación (red local, direcciones, destinos) va en archivos de ajustes, con un `.example` como plantilla.
 
@@ -75,4 +87,4 @@ MIT. Ver `LICENSE`.
 
 ---
 
-*Actualizado: 2026-09-27 15:40 UTC.*
+*Actualizado: 2026-09-28 18:45 UTC.*

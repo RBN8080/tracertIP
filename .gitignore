@@ -8,9 +8,9 @@ datos/
 *.etl
 *.jsonl
 # ...salvo los datos de prueba SINTETICOS (valores de documentacion)
-!F0/analisis/testdata/*.jsonl
+!00_verificacion/analisis/testdata/*.jsonl
 .env
 .env.*
 # Binarios
 *.exe
-F0/analisis/analisis
+00_verificacion/analisis/analisis
