@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/rbn8080/tracertip/01_engine/internal/probe"
 )
 
 func TestRunExitCodes(t *testing.T) {
@@ -17,7 +20,13 @@ func TestRunExitCodes(t *testing.T) {
 		{[]string{"version"}, exitOK, "tracertip", ""},
 		{[]string{"help"}, exitOK, "usage:", ""},
 		{[]string{"nope"}, exitUsage, "", `unknown command "nope"`},
+		{[]string{"trace"}, exitUsage, "", "usage: tracertip trace"},
+		{[]string{"trace", "2001:db8::1"}, exitUsage, "", "not an IPv4 address"},
+		{[]string{"trace", "-ttl-max", "41", "192.0.2.1"}, exitUsage, "", "ttl-max 1-40"},
+		{[]string{"trace", "-rounds", "0", "192.0.2.1"}, exitUsage, "", "rounds must be"},
+		{[]string{"trace", "192.0.2.1"}, exitFail, "", "no socket in tests"},
 	} {
+		open = func() (probe.Conn, error) { return nil, errors.New("no socket in tests") }
 		var out, errb bytes.Buffer
 		if got := run(tc.args, &out, &errb); got != tc.code {
 			t.Errorf("%v: exit %d, want %d", tc.args, got, tc.code)

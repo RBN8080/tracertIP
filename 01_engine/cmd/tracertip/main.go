@@ -25,6 +25,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	switch args[0] {
+	case "trace":
+		return runTrace(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, "tracertip", version())
 		return exitOK
@@ -41,6 +43,7 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `usage: tracertip <command> [flags]
 
 commands:
+  trace     trace the path to an IPv4 target (Linux, needs CAP_NET_RAW)
   version   print the version
   help      print this help
 `)
