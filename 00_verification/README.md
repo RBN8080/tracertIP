@@ -8,6 +8,6 @@ Checks whether the product is worth building: 48 h of real traces with `mtr` to 
 
 **Feeds `01_engine`:** real data to build and tune it.
 
-**Status:** frozen when the window closes, on 2026-09-28.
+**Status:** frozen when the window closes, on 2026-09-28. Its code and comments stay in Spanish, exactly as they ran on the node.
 
-*Updated: 2026-09-28 18:54 UTC.*
+*Updated: 2026-09-28 19:02 UTC.*
