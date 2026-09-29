@@ -1,0 +1,67 @@
+package ipdb
+
+import (
+	"fmt"
+	"io"
+	"net/url"
+	"time"
+)
+
+// Size caps and row floors come from the files seen on 2026-09-28, with a wide
+// margin (P3): IPtoASN 7 MB gz, DB-IP ASN 7 MB gz, DB-IP City 86 MB gz,
+// OurAirports 12 MB.
+const (
+	mb = 1 << 20
+	gb = 1 << 30
+)
+
+// Sources are the bases the engine uses. Only IPinfo needs a token, and it
+// only serves to measure agreement with IPtoASN (00_IDEA 8).
+func Sources() []Source {
+	return []Source{
+		{
+			Name: "iptoasn", File: "ip2asn-v4.tsv.gz", Gzip: true,
+			URL:      fixed("https://iptoasn.com/data/ip2asn-v4.tsv.gz"),
+			MaxBytes: 100 * mb, MaxRaw: gb, MinRows: 100_000,
+			Validate: func(r io.Reader) (int, error) { return ReadIPtoASN(r, func(ASNRange) error { return nil }) },
+		},
+		{
+			Name: "dbip-asn", File: "dbip-asn-lite.csv.gz", Gzip: true, PrevMonth: true,
+			URL:      monthly("https://download.db-ip.com/free/dbip-asn-lite-%s.csv.gz"),
+			MaxBytes: 100 * mb, MaxRaw: gb, MinRows: 100_000,
+			Validate: func(r io.Reader) (int, error) { return ReadDBIPASN(r, func(ASNRange) error { return nil }) },
+		},
+		{
+			Name: "dbip-city", File: "dbip-city-lite.csv.gz", Gzip: true, PrevMonth: true,
+			URL:      monthly("https://download.db-ip.com/free/dbip-city-lite-%s.csv.gz"),
+			MaxBytes: gb, MaxRaw: 4 * gb, MinRows: 1_000_000,
+			Validate: func(r io.Reader) (int, error) { return ReadDBIPCity(r, func(CityRange) error { return nil }) },
+		},
+		{
+			Name: "ourairports", File: "airports.csv",
+			URL:      fixed("https://davidmegginson.github.io/ourairports-data/airports.csv"),
+			MaxBytes: 200 * mb, MaxRaw: 200 * mb, MinRows: 5_000,
+			Validate: func(r io.Reader) (int, error) { return ReadAirports(r, func(Airport) error { return nil }) },
+		},
+		{
+			Name: "ipinfo", File: "ipinfo_lite.csv.gz", Gzip: true, NeedsToken: true,
+			URL: func(_ time.Time, t Token) string {
+				return "https://ipinfo.io/data/ipinfo_lite.csv.gz?token=" + url.QueryEscape(t.reveal())
+			},
+			MaxBytes: gb, MaxRaw: 4 * gb, MinRows: 1_000_000,
+			Validate: func(r io.Reader) (int, error) { return ReadIPinfoLite(r, func(ASNRange) error { return nil }) },
+		},
+	}
+}
+
+func fixed(u string) func(time.Time, Token) string {
+	return func(time.Time, Token) string { return u }
+}
+
+// monthly names DB-IP files by month; early in a month the new file may not
+// exist yet, and the caller keeps the current one.
+func monthly(format string) func(time.Time, Token) string {
+	return func(now time.Time, _ Token) string {
+		return fmt.Sprintf(format, now.UTC().Format("2006-01"))
+	}
+}
