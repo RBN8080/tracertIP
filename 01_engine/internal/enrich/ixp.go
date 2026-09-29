@@ -80,7 +80,16 @@ type Anycast struct {
 
 func lookupAnycast(dir string, addrs []netip.Addr) (map[netip.Addr]*Anycast, error) {
 	out := map[netip.Addr]*Anycast{}
-	err := readFile(filepath.Join(dir, "anycast-ipv4.csv"), func(f *os.File) error {
+	for _, file := range []string{"anycast-ipv4.csv", "anycast-ipv6.csv"} {
+		if err := readCensus(filepath.Join(dir, file), addrs, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func readCensus(path string, addrs []netip.Addr, out map[netip.Addr]*Anycast) error {
+	err := readFile(path, func(f *os.File) error {
 		_, err := ipdb.ReadAnycastCensus(f, func(p ipdb.AnycastPrefix) error {
 			for _, a := range addrs {
 				if out[a] == nil && p.Prefix.Contains(a) {
@@ -92,7 +101,7 @@ func lookupAnycast(dir string, addrs []netip.Addr) (map[netip.Addr]*Anycast, err
 		return err
 	})
 	if errors.Is(err, os.ErrNotExist) {
-		return out, nil
+		return nil
 	}
-	return out, err
+	return err
 }

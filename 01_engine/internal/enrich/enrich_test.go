@@ -17,12 +17,17 @@ import (
 func TestClassify(t *testing.T) {
 	first := func(p string) netip.Addr { return netip.MustParsePrefix(p).Addr().Next() }
 	for a, want := range map[netip.Addr]string{
-		first("192.168.0.0/16"):            ClassPrivate,
-		first("100.64.0.0/10"):             ClassCGNAT, // H8: access hops behind CGNAT
-		first("169.254.0.0/16"):            ClassLink,
-		first("192.0.2.0/24"):              ClassDoc,
-		netip.MustParseAddr("8.8.8.8"):     ClassPublic,
-		netip.MustParseAddr("100.128.0.1"): ClassPublic, // just past 100.64.0.0/10
+		first("192.168.0.0/16"):                     ClassPrivate,
+		first("100.64.0.0/10"):                      ClassCGNAT, // H8: access hops behind CGNAT
+		first("169.254.0.0/16"):                     ClassLink,
+		first("192.0.2.0/24"):                       ClassDoc,
+		netip.MustParseAddr("8.8.8.8"):              ClassPublic,
+		netip.MustParseAddr("100.128.0.1"):          ClassPublic,  // just past 100.64.0.0/10
+		first("fc00::/7"):                           ClassPrivate, // IPv6 unique local
+		first("fe80::/10"):                          ClassLink,
+		netip.MustParseAddr("2001:db8::1"):          ClassDoc,
+		netip.MustParseAddr("::1"):                  ClassLoopback,
+		netip.MustParseAddr("2001:4860:4860::8888"): ClassPublic,
 	} {
 		if got, _ := Classify(a); got != want {
 			t.Errorf("%s: %s, want %s", a, got, want)
@@ -100,15 +105,20 @@ func TestEnrichFromBases(t *testing.T) {
 	dir := t.TempDir()
 	writeGz(t, filepath.Join(dir, "ip2asn-v4.tsv.gz"),
 		"192.0.2.0\t192.0.2.127\t64496\tZZ\tEXAMPLE-A\n198.51.100.0\t198.51.100.255\t0\tNone\tNot routed\n")
+	writeGz(t, filepath.Join(dir, "ip2asn-v6.tsv.gz"), "2001:db8:1::\t2001:db8:1:ffff:ffff:ffff:ffff:ffff\t64510\tZZ\tEXAMPLE-V6\n")
 	writeGz(t, filepath.Join(dir, "dbip-asn-lite.csv.gz"), "192.0.2.0,192.0.2.255,64497,EXAMPLE-B\n")
 	writeGz(t, filepath.Join(dir, "dbip-city-lite.csv.gz"), "192.0.2.0,192.0.2.255,NA,ZZ,R,Town,1.5,2.5\n")
 
 	a, b, c, cg := netip.MustParseAddr("192.0.2.9"), netip.MustParseAddr("198.51.100.1"),
 		netip.MustParseAddr("203.0.114.1"), netip.MustParsePrefix("100.64.0.0/10").Addr().Next()
 	// The bases are searched directly: Enrich only looks up public addresses.
-	db, err := lookupBases(dir, []netip.Addr{a, b, c})
+	v6 := netip.MustParseAddr("2001:db8:1::42")
+	db, err := lookupBases(dir, []netip.Addr{a, b, c, v6})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if as := db[v6].asn; len(as) != 1 || as[0].ASN != 64510 {
+		t.Errorf("%s: AS %+v, want 64510 from the IPv6 base", v6, as)
 	}
 	if as := db[a].asn; len(as) != 2 || as[0].ASN != 64496 || as[0].Source != "iptoasn" || as[1].ASN != 64497 {
 		t.Errorf("%s: AS %+v, want IPtoASN 64496 then DB-IP 64497 (both shown)", a, as)

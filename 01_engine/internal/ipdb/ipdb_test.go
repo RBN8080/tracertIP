@@ -49,7 +49,7 @@ func server(t *testing.T, body func(w http.ResponseWriter, r *http.Request)) (*h
 func TestReaders(t *testing.T) {
 	var got []ASNRange
 	n, err := ReadIPtoASN(strings.NewReader(tsv), func(r ASNRange) error { got = append(got, r); return nil })
-	if err != nil || n != 3 || got[1].ASN != 0 || got[2].Name != "EXAMPLE-B" {
+	if err != nil || n != 4 || got[1].ASN != 0 || got[2].Name != "EXAMPLE-V6" || got[3].Name != "EXAMPLE-B" {
 		t.Errorf("iptoasn: %d rows, %v, %+v", n, err, got)
 	}
 	for name, bad := range map[string]string{
@@ -93,7 +93,7 @@ func FuzzReadIPtoASN(f *testing.F) {
 	f.Add(tsv)
 	f.Fuzz(func(t *testing.T, s string) {
 		ReadIPtoASN(strings.NewReader(s), func(r ASNRange) error {
-			if r.Hi.Less(r.Lo) || !r.Lo.Is4() {
+			if r.Hi.Less(r.Lo) || r.Lo.Is4() != r.Hi.Is4() {
 				t.Fatalf("bad range accepted: %+v", r)
 			}
 			return nil
@@ -109,7 +109,7 @@ func TestUpdate(t *testing.T) {
 	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 
 	e, err := Update(context.Background(), c, dir, src, Token{}, now)
-	if err != nil || e.Rows != 3 || len(e.SHA256) != 64 {
+	if err != nil || e.Rows != 4 || len(e.SHA256) != 64 {
 		t.Fatalf("first update: %+v, %v", e, err)
 	}
 	good, _ := os.ReadFile(filepath.Join(dir, src.File))
@@ -130,13 +130,13 @@ func TestUpdate(t *testing.T) {
 	}
 
 	body = gz(tsv + "203.0.114.0\t203.0.114.255\t64499\tZZ\tEXAMPLE-C\n")
-	if e, err := Update(context.Background(), c, dir, src, Token{}, now); err != nil || e.Rows != 4 {
+	if e, err := Update(context.Background(), c, dir, src, Token{}, now); err != nil || e.Rows != 5 {
 		t.Fatalf("second good update: %+v, %v", e, err)
 	}
 	if prev, _ := os.ReadFile(filepath.Join(dir, src.File+".prev")); !bytes.Equal(prev, good) {
 		t.Error("the previous file was not kept as .prev")
 	}
-	if m, _ := ReadManifest(dir); m["iptoasn"].Rows != 4 {
+	if m, _ := ReadManifest(dir); m["iptoasn"].Rows != 5 {
 		t.Errorf("manifest %+v", m)
 	}
 	if left, _ := filepath.Glob(filepath.Join(dir, ".download-*")); len(left) != 0 {
@@ -283,7 +283,7 @@ func TestReadAnycastCensus(t *testing.T) {
 	csv := "prefix,number_of_sites,backing_prefix\n192.0.2.0/24,62,192.0.2.0/24\n2001:db8::/48,5,2001:db8::/48\n"
 	var got []AnycastPrefix
 	n, err := ReadAnycastCensus(strings.NewReader(csv), func(p AnycastPrefix) error { got = append(got, p); return nil })
-	if err != nil || n != 1 || got[0].Sites != 62 || got[0].Prefix.String() != "192.0.2.0/24" {
+	if err != nil || n != 2 || got[0].Sites != 62 || got[1].Prefix.String() != "2001:db8::/48" {
 		t.Errorf("%d, %v, %+v", n, err, got)
 	}
 }

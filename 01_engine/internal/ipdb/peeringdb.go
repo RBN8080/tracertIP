@@ -19,10 +19,10 @@ type IXMember struct {
 	IXLanID int
 	IXName  string
 	ASN     int
-	Addr    netip.Addr // invalid when the member has no IPv4 address
+	Addr    netip.Addr // one member row per address family; invalid if it has none
 }
 
-// ReadIXPrefixes reads PeeringDB /api/ixpfx, keeping IPv4 prefixes.
+// ReadIXPrefixes reads PeeringDB /api/ixpfx (IPv4 and IPv6 prefixes).
 func ReadIXPrefixes(r io.Reader, fn func(IXPrefix) error) (int, error) {
 	var row struct {
 		Protocol string `json:"protocol"`
@@ -30,11 +30,8 @@ func ReadIXPrefixes(r io.Reader, fn func(IXPrefix) error) (int, error) {
 		IXLanID  int    `json:"ixlan_id"`
 	}
 	return readData(r, &row, func() (bool, error) {
-		if row.Protocol != "IPv4" {
-			return false, nil
-		}
 		p, err := netip.ParsePrefix(row.Prefix)
-		if err != nil || !p.Addr().Is4() {
+		if err != nil {
 			return false, fmt.Errorf("bad prefix %q", row.Prefix)
 		}
 		return true, fn(IXPrefix{Prefix: p.Masked(), IXLanID: row.IXLanID})
@@ -48,6 +45,7 @@ func ReadIXMembers(r io.Reader, fn func(IXMember) error) (int, error) {
 		Name    string  `json:"name"`
 		ASN     int     `json:"asn"`
 		IPv4    *string `json:"ipaddr4"`
+		IPv6    *string `json:"ipaddr6"`
 	}
 	return readData(r, &row, func() (bool, error) {
 		m := IXMember{IXLanID: row.IXLanID, IXName: row.Name, ASN: row.ASN}
@@ -58,8 +56,21 @@ func ReadIXMembers(r io.Reader, fn func(IXMember) error) (int, error) {
 			}
 			m.Addr = a
 		}
-		row.IPv4 = nil
-		return true, fn(m)
+		if err := fn(m); err != nil {
+			return false, err
+		}
+		if row.IPv6 != nil && *row.IPv6 != "" {
+			a, err := netip.ParseAddr(*row.IPv6)
+			if err != nil {
+				return false, fmt.Errorf("bad ipaddr6 %q", *row.IPv6)
+			}
+			m.Addr = a
+			if err := fn(m); err != nil {
+				return false, err
+			}
+		}
+		row.IPv4, row.IPv6 = nil, nil
+		return true, nil
 	})
 }
 

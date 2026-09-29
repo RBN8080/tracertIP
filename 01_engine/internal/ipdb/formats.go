@@ -38,7 +38,7 @@ func ReadIPtoASN(r io.Reader, fn func(ASNRange) error) (int, error) {
 	cr.Comma, cr.FieldsPerRecord, cr.LazyQuotes, cr.ReuseRecord = '\t', 5, true, true
 	return readRows(cr, func(f []string) (bool, error) {
 		lo, hi, err := rangeOf(f[0], f[1])
-		if err != nil || !lo.Is4() {
+		if err != nil {
 			return false, err
 		}
 		asn, err := strconv.Atoi(f[2])
@@ -55,7 +55,7 @@ func ReadDBIPASN(r io.Reader, fn func(ASNRange) error) (int, error) {
 	cr.FieldsPerRecord, cr.ReuseRecord = 4, true
 	return readRows(cr, func(f []string) (bool, error) {
 		lo, hi, err := rangeOf(f[0], f[1])
-		if err != nil || !lo.Is4() {
+		if err != nil {
 			return false, err
 		}
 		asn, err := strconv.Atoi(f[2])
@@ -73,7 +73,7 @@ func ReadDBIPCity(r io.Reader, fn func(CityRange) error) (int, error) {
 	cr.FieldsPerRecord, cr.ReuseRecord = 8, true
 	return readRows(cr, func(f []string) (bool, error) {
 		lo, hi, err := rangeOf(f[0], f[1])
-		if err != nil || !lo.Is4() {
+		if err != nil {
 			return false, err
 		}
 		lat, lon, err := coords(f[6], f[7])
@@ -95,14 +95,14 @@ func ReadIPinfoLite(r io.Reader, fn func(ASNRange) error) (int, error) {
 	}
 	return readRows(cr, func(f []string) (bool, error) {
 		n := f[col["network"]]
-		if strings.Contains(n, ":") || f[col["asn"]] == "" {
+		if f[col["asn"]] == "" {
 			return false, nil
 		}
 		p, err := netip.ParsePrefix(n)
 		if !strings.Contains(n, "/") {
 			var a netip.Addr
 			if a, err = netip.ParseAddr(n); err == nil {
-				p = netip.PrefixFrom(a, 32)
+				p = netip.PrefixFrom(a, a.BitLen())
 			}
 		}
 		if err != nil {
@@ -202,10 +202,12 @@ func coords(a, b string) (float64, float64, error) {
 }
 
 func lastAddr(p netip.Prefix) netip.Addr {
-	a := p.Masked().Addr().As4()
-	host := uint32(1)<<(32-p.Bits()) - 1
-	v := uint32(a[0])<<24 | uint32(a[1])<<16 | uint32(a[2])<<8 | uint32(a[3]) | host
-	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
+	b := p.Masked().Addr().AsSlice()
+	for bit := p.Bits(); bit < len(b)*8; bit++ {
+		b[bit/8] |= 0x80 >> (bit % 8)
+	}
+	a, _ := netip.AddrFromSlice(b)
+	return a
 }
 
 // AnycastPrefix is a prefix the LACeS census found anycast, and from how many sites.
@@ -225,7 +227,7 @@ func ReadAnycastCensus(r io.Reader, fn func(AnycastPrefix) error) (int, error) {
 	}
 	return readRows(cr, func(f []string) (bool, error) {
 		p, err := netip.ParsePrefix(f[col["prefix"]])
-		if err != nil || !p.Addr().Is4() {
+		if err != nil {
 			return false, err
 		}
 		n, err := strconv.Atoi(f[col["number_of_sites"]])

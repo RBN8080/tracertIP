@@ -69,7 +69,7 @@ func Hops(probes []model.Probe, target netip.Addr) []Hop {
 			if ms := float64(r.RTTNS) / 1e6; a.h.MinRTT < 0 || ms < a.h.MinRTT {
 				a.h.MinRTT = ms
 			}
-			if from == target && r.ICMPType == 0 {
+			if from == target && (r.ICMPType == 0 || r.ICMPType == 129) { // Echo Reply, ICMP or ICMPv6
 				a.h.Target = true
 				if targetTTL == 0 || p.TTL < targetTTL {
 					targetTTL = p.TTL

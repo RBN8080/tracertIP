@@ -58,5 +58,6 @@ func lookupNames(ctx context.Context, r *net.Resolver, addrs []netip.Addr) map[n
 }
 
 func bogusPTR(name string) bool {
-	return strings.HasSuffix(strings.TrimSuffix(strings.ToLower(name), "."), ".in-addr.arpa")
+	n := strings.TrimSuffix(strings.ToLower(name), ".")
+	return strings.HasSuffix(n, ".in-addr.arpa") || strings.HasSuffix(n, ".ip6.arpa")
 }

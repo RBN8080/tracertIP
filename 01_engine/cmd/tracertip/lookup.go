@@ -22,7 +22,7 @@ func runLookup(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	noDNS := fs.Bool("no-dns", false, "do not look up names")
 	jsonOut := fs.Bool("json", false, "write one JSON object per address")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: tracertip lookup [flags] <ipv4>... (or - to read them from stdin)")
+		fmt.Fprintln(stderr, "usage: tracertip lookup [flags] <ip>... (or - to read them from stdin)")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil || fs.NArg() == 0 {
@@ -42,11 +42,11 @@ func runLookup(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var addrs []netip.Addr
 	for _, w := range words {
 		a, err := netip.ParseAddr(w)
-		if err != nil || !a.Is4() {
-			fmt.Fprintf(stderr, "tracertip: %q is not an IPv4 address\n", w)
+		if err != nil {
+			fmt.Fprintf(stderr, "tracertip: %q is not an IP address\n", w)
 			return exitUsage
 		}
-		addrs = append(addrs, a)
+		addrs = append(addrs, a.Unmap())
 	}
 	info, err := enrich.Enrich(context.Background(), addrs,
 		enrich.Options{Dir: *dir, Hints: *hints, Resolver: *resolver, NoDNS: *noDNS})

@@ -15,16 +15,25 @@ import (
 	"github.com/rbn8080/tracertip/01_engine/internal/model"
 )
 
-// Conn sends ICMP messages with a given TTL and receives whole IPv4 packets.
+// Conn sends ICMP messages with a given TTL (IPv6: hop limit). For IPv4, Recv
+// returns whole packets; for IPv6 the kernel strips the header, so the sender
+// and hop limit come in Meta (RFC 3542).
 type Conn interface {
 	Send(dst netip.Addr, ttl int, icmp []byte) error
-	Recv(buf []byte, deadline time.Time) (int, error)
+	Recv(buf []byte, deadline time.Time) (int, Meta, error)
 	Close() error
+}
+
+// Meta is what an IPv6 receive reports outside the ICMPv6 message.
+type Meta struct {
+	From     netip.Addr
+	HopLimit int
 }
 
 // Config holds the probing parameters (00_IDEA 1.bis frontier).
 type Config struct {
 	Target        netip.Addr
+	Source        netip.Addr    // IPv6 only: the checksum covers it (RFC 8200 8.1)
 	TTLMax        int           // 40: longest Phase 0 path was 31 hops
 	Rounds        int           // rounds of TTL 1..cap
 	Timeout       time.Duration // 2000 ms per probe; worst Phase 0 RTT was 842 ms
@@ -64,8 +73,9 @@ type pending struct {
 // Trace probes cfg.Target and calls emit for each probe once it can no longer
 // get an on-time reply, in (round, TTL) order within each round.
 func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error) (Summary, error) {
-	if !cfg.Target.Is4() {
-		return Summary{}, errors.New("probe: target must be IPv4")
+	v6 := cfg.Target.Is6() && !cfg.Target.Is4In6()
+	if v6 && !cfg.Source.Is6() {
+		return Summary{}, errors.New("probe: an IPv6 target needs the IPv6 source address")
 	}
 	start := time.Now()
 	var (
@@ -86,7 +96,7 @@ func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error
 				return
 			default:
 			}
-			n, err := c.Recv(buf, time.Now().Add(100*time.Millisecond))
+			n, meta, err := c.Recv(buf, time.Now().Add(100*time.Millisecond))
 			if err != nil {
 				if errors.Is(err, os.ErrDeadlineExceeded) {
 					continue
@@ -94,7 +104,12 @@ func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error
 				return
 			}
 			now := time.Now()
-			r, err := parseReply(buf[:n])
+			var r reply
+			if v6 {
+				r, err = parseReply6(buf[:n], meta)
+			} else {
+				r, err = parseReply(buf[:n])
+			}
 			if err != nil || r.id != cfg.ICMPID || r.dst != cfg.Target {
 				continue
 			}
@@ -112,7 +127,7 @@ func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error
 					QTTL: r.qTTL, QIPID: r.qIPID, QLen: r.qLen,
 					Raw: append([]byte(nil), r.icmp...),
 				})
-				if r.icmpType == icmpEchoReply && r.from == cfg.Target && !late {
+				if r.echo && r.from == cfg.Target && !late {
 					_, ttl := splitSeq(r.seq)
 					if !sum.Reached || ttl < sum.TargetTTL {
 						sum.Reached, sum.TargetTTL = true, ttl
@@ -205,7 +220,11 @@ func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error
 			inflight[seq] = p
 			order = append(order, seq)
 			mu.Unlock()
-			if err := c.Send(cfg.Target, ttl, echoRequest(cfg.ICMPID, seq, cfg.FlowID)); err != nil {
+			msg := echoRequest(cfg.ICMPID, seq, cfg.FlowID)
+			if v6 {
+				msg = echoRequest6(cfg.Source, cfg.Target, cfg.ICMPID, seq, cfg.FlowID)
+			}
+			if err := c.Send(cfg.Target, ttl, msg); err != nil {
 				mu.Lock()
 				sendErr(&p.rec, err)
 				mu.Unlock()

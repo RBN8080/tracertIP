@@ -3,7 +3,6 @@ package enrich
 import (
 	"bufio"
 	"compress/gzip"
-	"encoding/binary"
 	"errors"
 	"io"
 	"net/netip"
@@ -42,22 +41,17 @@ type dbResult struct {
 // addresses (binary search per range), so no base is held in memory; this is
 // the design of 00_verification/analysis/asn.go.
 func lookupBases(dir string, addrs []netip.Addr) (map[netip.Addr]*dbResult, error) {
-	keys := make([]uint32, 0, len(addrs))
-	for _, a := range addrs {
-		if a.Is4() {
-			keys = append(keys, u32(a))
-		}
-	}
-	slices.Sort(keys)
+	keys := slices.Clone(addrs)
+	slices.SortFunc(keys, func(a, b netip.Addr) int { return a.Compare(b) })
 	keys = slices.Compact(keys)
 	out := map[netip.Addr]*dbResult{}
 	for _, k := range keys {
-		out[addr(k)] = &dbResult{}
+		out[k] = &dbResult{}
 	}
 	each := func(lo, hi netip.Addr, fn func(*dbResult)) {
-		i := sort.Search(len(keys), func(i int) bool { return keys[i] >= u32(lo) })
-		for ; i < len(keys) && keys[i] <= u32(hi); i++ {
-			fn(out[addr(keys[i])])
+		i := sort.Search(len(keys), func(i int) bool { return keys[i].Compare(lo) >= 0 })
+		for ; i < len(keys) && keys[i].Compare(hi) <= 0; i++ {
+			fn(out[keys[i]])
 		}
 	}
 	asn := func(src string) func(ipdb.ASNRange) error {
@@ -73,6 +67,7 @@ func lookupBases(dir string, addrs []netip.Addr) (map[netip.Addr]*dbResult, erro
 		read func(io.Reader) error
 	}{
 		{"ip2asn-v4.tsv.gz", func(r io.Reader) error { _, err := ipdb.ReadIPtoASN(r, asn("iptoasn")); return err }},
+		{"ip2asn-v6.tsv.gz", func(r io.Reader) error { _, err := ipdb.ReadIPtoASN(r, asn("iptoasn")); return err }},
 		{"dbip-asn-lite.csv.gz", func(r io.Reader) error { _, err := ipdb.ReadDBIPASN(r, asn("dbip-asn")); return err }},
 		{"ipinfo_lite.csv.gz", func(r io.Reader) error { _, err := ipdb.ReadIPinfoLite(r, asn("ipinfo")); return err }},
 		{"dbip-city-lite.csv.gz", func(r io.Reader) error {
@@ -109,15 +104,4 @@ func readGz(path string, fn func(io.Reader) error) error {
 	}
 	defer gz.Close()
 	return fn(gz)
-}
-
-func u32(a netip.Addr) uint32 {
-	b := a.As4()
-	return binary.BigEndian.Uint32(b[:])
-}
-
-func addr(v uint32) netip.Addr {
-	var b [4]byte
-	binary.BigEndian.PutUint32(b[:], v)
-	return netip.AddrFrom4(b)
 }

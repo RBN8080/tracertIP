@@ -47,8 +47,8 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `usage: tracertip <command> [flags]
 
 commands:
-  trace     trace the path to an IPv4 target (Linux, needs CAP_NET_RAW)
-  lookup    class, AS, name and location hints of IPv4 addresses
+  trace     trace the path to an IPv4 or IPv6 target (Linux, needs CAP_NET_RAW)
+  lookup    class, AS, name and location hints of IP addresses
   update-db download and verify the local IP bases
   version   print the version
   help      print this help

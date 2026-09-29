@@ -85,6 +85,7 @@ type reply struct {
 	ipLen    int
 	icmpType int
 	icmpCode int
+	echo     bool   // an Echo Reply (ICMP 0, ICMPv6 129): the target answered
 	id       uint16 // identifier of the probe it answers
 	seq      uint16 // sequence of the probe it answers
 	dst      netip.Addr
@@ -121,6 +122,7 @@ func parseReply(pkt []byte) (reply, error) {
 	r.icmpType, r.icmpCode = int(icmp[0]), int(icmp[1])
 	switch r.icmpType {
 	case icmpEchoReply:
+		r.echo = true
 		r.id = binary.BigEndian.Uint16(icmp[4:])
 		r.seq = binary.BigEndian.Uint16(icmp[6:])
 		r.dst = r.from

@@ -19,7 +19,8 @@ type fakeNet struct {
 	dist    int
 	silent  map[int]bool
 	delay   time.Duration
-	replies chan []byte
+	replies chan delivery
+	src     netip.Addr // IPv6: the node's address, covered by the checksum
 
 	mu    sync.Mutex
 	flows map[[2]uint16]int // (id, checksum) seen on the wire
@@ -28,7 +29,12 @@ type fakeNet struct {
 
 func newFakeNet(target netip.Addr, dist int) *fakeNet {
 	return &fakeNet{target: target, dist: dist, silent: map[int]bool{}, delay: 3 * time.Millisecond,
-		replies: make(chan []byte, 1024), flows: map[[2]uint16]int{}}
+		replies: make(chan delivery, 1024), flows: map[[2]uint16]int{}}
+}
+
+type delivery struct {
+	b []byte
+	m Meta
 }
 
 func (f *fakeNet) Send(dst netip.Addr, ttl int, icmp []byte) error {
@@ -36,6 +42,9 @@ func (f *fakeNet) Send(dst netip.Addr, ttl int, icmp []byte) error {
 	f.flows[[2]uint16{binary.BigEndian.Uint16(icmp[4:]), binary.BigEndian.Uint16(icmp[2:])}]++
 	f.sent++
 	f.mu.Unlock()
+	if f.target.Is6() {
+		return f.send6(dst, ttl, icmp)
+	}
 	if !checksumOK(icmp) {
 		panic("probe with a bad checksum")
 	}
@@ -48,18 +57,47 @@ func (f *fakeNet) Send(dst netip.Addr, ttl int, icmp []byte) error {
 	default:
 		pkt = ipv4(netip.AddrFrom4([4]byte{192, 0, 2, byte(ttl)}), 255-ttl, ttl, timeExceeded(dst, icmp))
 	}
-	time.AfterFunc(f.delay, func() { f.replies <- pkt })
+	time.AfterFunc(f.delay, func() { f.replies <- delivery{b: pkt} })
 	return nil
 }
 
-func (f *fakeNet) Recv(buf []byte, deadline time.Time) (int, error) {
+func (f *fakeNet) send6(dst netip.Addr, ttl int, icmp []byte) error {
+	if !checksum6OK(f.src, dst, icmp) {
+		panic("ICMPv6 probe with a bad checksum")
+	}
+	var d delivery
+	switch {
+	case ttl >= f.dist:
+		m := append([]byte(nil), icmp...)
+		m[0] = icmp6EchoReply
+		d = delivery{b: m, m: Meta{From: f.target, HopLimit: 57}}
+	case f.silent[ttl]:
+		return nil
+	default:
+		q := make([]byte, ipv6Header)
+		q[0], q[6], q[7] = 0x60, protoICMPv6, 1
+		t := dst.As16()
+		copy(q[24:], t[:])
+		m := append([]byte{icmp6TimeExceed, 0, 0, 0, 0, 0, 0, 0}, q...)
+		m = append(m, icmp[:8]...)
+		router := netip.MustParseAddr("2001:db8::")
+		for i := 0; i < ttl; i++ {
+			router = router.Next()
+		}
+		d = delivery{b: m, m: Meta{From: router, HopLimit: 64 - ttl}}
+	}
+	time.AfterFunc(f.delay, func() { f.replies <- d })
+	return nil
+}
+
+func (f *fakeNet) Recv(buf []byte, deadline time.Time) (int, Meta, error) {
 	t := time.NewTimer(time.Until(deadline))
 	defer t.Stop()
 	select {
-	case p := <-f.replies:
-		return copy(buf, p), nil
+	case d := <-f.replies:
+		return copy(buf, d.b), d.m, nil
 	case <-t.C:
-		return 0, os.ErrDeadlineExceeded
+		return 0, Meta{}, os.ErrDeadlineExceeded
 	}
 }
 
@@ -117,10 +155,54 @@ func TestTrace(t *testing.T) {
 	}
 }
 
-func TestTraceRejectsIPv6(t *testing.T) {
-	cfg := Defaults
-	cfg.Target = netip.MustParseAddr("2001:db8::1")
-	if _, err := Trace(context.Background(), newFakeNet(cfg.Target, 1), cfg, nil); err == nil {
-		t.Error("IPv6 target accepted")
+func TestTraceIPv6(t *testing.T) {
+	target := netip.MustParseAddr("2001:db8:ffff::7")
+	net := newFakeNet(target, 3)
+	net.src = netip.MustParseAddr("2001:db8:aaaa::1")
+	cfg := Config{Target: target, Source: net.src, TTLMax: 8, Rounds: 2, Timeout: 50 * time.Millisecond,
+		RoundInterval: 60 * time.Millisecond, Spacing: time.Millisecond, ICMPID: 0x4242, FlowID: 0x1111}
+	var recs []model.Probe
+	sum, err := Trace(context.Background(), net, cfg, func(p model.Probe) error { recs = append(recs, p); return nil })
+	if err != nil {
+		t.Fatal(err)
 	}
+	if !sum.Reached || sum.TargetTTL != 3 || len(net.flows) != 1 {
+		t.Errorf("summary %+v, flows %v", sum, net.flows)
+	}
+	for _, r := range recs {
+		for _, rep := range r.Replies {
+			if r.TTL < 3 && (rep.ICMPType != icmp6TimeExceed || rep.QTTL != 1 || rep.IPTTL != 64-r.TTL) {
+				t.Errorf("TTL %d: %+v, want Time Exceeded quoting hop limit 1", r.TTL, rep)
+			}
+			if r.TTL >= 3 && (rep.ICMPType != icmp6EchoReply || rep.From != target.String()) {
+				t.Errorf("TTL %d: %+v, want an Echo Reply from the target", r.TTL, rep)
+			}
+		}
+	}
+	cfg.Source = netip.Addr{}
+	if _, err := Trace(context.Background(), net, cfg, nil); err == nil {
+		t.Error("IPv6 trace without a source address accepted")
+	}
+}
+
+// Paris for ICMPv6: the checksum (which covers both addresses) stays constant.
+func TestEchoRequest6ConstantFlow(t *testing.T) {
+	src, dst := netip.MustParseAddr("2001:db8:aaaa::1"), netip.MustParseAddr("2001:db8:ffff::7")
+	for ttl := 1; ttl <= 40; ttl++ {
+		b := echoRequest6(src, dst, 0x4242, seqFor(3, ttl), 0x1111)
+		if binary.BigEndian.Uint16(b[2:]) != 0x1111 || !checksum6OK(src, dst, b) || b[0] != icmp6Echo {
+			t.Fatalf("TTL %d: % x", ttl, b[:8])
+		}
+	}
+}
+
+func FuzzParseReply6(f *testing.F) {
+	f.Add([]byte{icmp6EchoReply, 0, 0, 0, 1, 2, 3, 4})
+	f.Add(append([]byte{icmp6TimeExceed, 0, 0, 0, 0, 0, 0, 0, 0x60}, make([]byte, 60)...))
+	f.Fuzz(func(t *testing.T, b []byte) {
+		r, err := parseReply6(b, Meta{})
+		if err == nil && len(r.icmp) != len(b) {
+			t.Fatal("ICMPv6 length changed")
+		}
+	})
 }

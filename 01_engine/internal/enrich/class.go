@@ -38,10 +38,24 @@ var special = []struct {
 	{netip.MustParsePrefix("203.0.113.0/24"), ClassDoc, "RFC 5737"},
 	{netip.MustParsePrefix("224.0.0.0/4"), ClassSpecial, "RFC 5771"},
 	{netip.MustParsePrefix("240.0.0.0/4"), ClassSpecial, "RFC 1112"},
+	// IANA IPv6 Special-Purpose Address Registry.
+	{netip.MustParsePrefix("::/128"), ClassSpecial, "RFC 4291"},
+	{netip.MustParsePrefix("::1/128"), ClassLoopback, "RFC 4291"},
+	{netip.MustParsePrefix("::ffff:0:0/96"), ClassSpecial, "RFC 4291"},
+	{netip.MustParsePrefix("64:ff9b::/96"), ClassSpecial, "RFC 6052"},
+	{netip.MustParsePrefix("64:ff9b:1::/48"), ClassSpecial, "RFC 8215"},
+	{netip.MustParsePrefix("100::/64"), ClassSpecial, "RFC 6666"},
+	{netip.MustParsePrefix("2001::/32"), ClassSpecial, "RFC 4380"},
+	{netip.MustParsePrefix("2001:db8::/32"), ClassDoc, "RFC 3849"},
+	{netip.MustParsePrefix("2002::/16"), ClassSpecial, "RFC 3056"},
+	{netip.MustParsePrefix("fc00::/7"), ClassPrivate, "RFC 4193"},
+	{netip.MustParsePrefix("fe80::/10"), ClassLink, "RFC 4291"},
+	{netip.MustParsePrefix("ff00::/8"), ClassSpecial, "RFC 4291"},
 }
 
-// Classify returns the class of an IPv4 address and the RFC behind it.
+// Classify returns the class of an address and the RFC behind it.
 func Classify(a netip.Addr) (class, rfc string) {
+	a = a.Unmap()
 	for _, s := range special {
 		if s.p.Contains(a) {
 			return s.class, s.rfc

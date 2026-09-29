@@ -37,7 +37,7 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	resolver := fs.String("resolver", "", "DNS server for names, host:port (default: config, then system)")
 	noDNS := fs.Bool("no-dns", false, "do not look up names")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: tracertip trace [flags] <ipv4>")
+		fmt.Fprintln(stderr, "usage: tracertip trace [flags] <ip>")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -48,8 +48,8 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	target, err := netip.ParseAddr(fs.Arg(0))
-	if err != nil || !target.Is4() {
-		fmt.Fprintf(stderr, "tracertip: %q is not an IPv4 address\n", fs.Arg(0))
+	if err != nil {
+		fmt.Fprintf(stderr, "tracertip: %q is not an IP address\n", fs.Arg(0))
 		return exitUsage
 	}
 	if *rounds < 1 || *rounds > 100 || *ttlMax < 1 || *ttlMax > probe.Defaults.TTLMax {
@@ -68,8 +68,16 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	pc := probe.Defaults
 	pc.Target, pc.Rounds, pc.TTLMax = target, *rounds, *ttlMax
 	pc.ICMPID, pc.FlowID = random16(), random16()
+	target = target.Unmap()
+	pc.Target = target
+	if target.Is6() {
+		if pc.Source, err = probe.SourceFor(target); err != nil {
+			fmt.Fprintln(stderr, "tracertip: no IPv6 route:", err)
+			return exitFail
+		}
+	}
 
-	conn, err := open()
+	conn, err := open(target)
 	if err != nil {
 		fmt.Fprintln(stderr, "tracertip:", err)
 		return exitFail
@@ -138,7 +146,7 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 func startRecord(t time.Time, target netip.Addr, pc probe.Config, bases string) model.Start {
 	s := model.Start{
 		V: model.SchemaVersion, Type: model.TypeStart, Tool: "tracertip", Version: version(),
-		Time: t.UTC(), Target: target.String(), Method: "icmp-paris",
+		Time: t.UTC(), Target: target.String(), Method: method(target),
 		Params: model.Params{
 			TTLMax: pc.TTLMax, TimeoutMS: int(pc.Timeout.Milliseconds()),
 			RoundIntervalMS: int(pc.RoundInterval.Milliseconds()), ProbeSpacingMS: int(pc.Spacing.Milliseconds()),
@@ -152,6 +160,14 @@ func startRecord(t time.Time, target netip.Addr, pc probe.Config, bases string) 
 		slices.SortFunc(s.Bases, func(a, b model.Base) int { return compare(a.Name, b.Name) })
 	}
 	return s
+}
+
+// method names the probe: ICMP or ICMPv6 Echo, Paris style.
+func method(t netip.Addr) string {
+	if t.Is6() {
+		return "icmpv6-paris"
+	}
+	return "icmp-paris"
 }
 
 func compare(a, b string) int {

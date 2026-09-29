@@ -27,6 +27,12 @@ func Sources() []Source {
 			Validate: func(r io.Reader) (int, error) { return ReadIPtoASN(r, func(ASNRange) error { return nil }) },
 		},
 		{
+			Name: "iptoasn-v6", File: "ip2asn-v6.tsv.gz", Gzip: true,
+			URL: fixed("https://iptoasn.com/data/ip2asn-v6.tsv.gz"), MinAge: time.Hour,
+			MaxBytes: 100 * mb, MaxRaw: gb, MinRows: 10_000,
+			Validate: func(r io.Reader) (int, error) { return ReadIPtoASN(r, func(ASNRange) error { return nil }) },
+		},
+		{
 			Name: "dbip-asn", File: "dbip-asn-lite.csv.gz", Gzip: true, PrevMonth: true,
 			URL: monthly("https://download.db-ip.com/free/dbip-asn-lite-%s.csv.gz"), MinAge: day,
 			MaxBytes: 100 * mb, MaxRaw: gb, MinRows: 100_000,
@@ -64,6 +70,12 @@ func Sources() []Source {
 			Name: "laces-anycast", File: "anycast-ipv4.csv", MinAge: day,
 			URL:      fixed("https://raw.githubusercontent.com/ut-dacs/Anycast-Census/main/IPv4-latest.csv"),
 			MaxBytes: 50 * mb, MaxRaw: 50 * mb, MinRows: 5_000,
+			Validate: func(r io.Reader) (int, error) { return ReadAnycastCensus(r, func(AnycastPrefix) error { return nil }) },
+		},
+		{
+			Name: "laces-anycast-v6", File: "anycast-ipv6.csv", MinAge: day,
+			URL:      fixed("https://raw.githubusercontent.com/ut-dacs/Anycast-Census/main/IPv6-latest.csv"),
+			MaxBytes: 50 * mb, MaxRaw: 50 * mb, MinRows: 500,
 			Validate: func(r io.Reader) (int, error) { return ReadAnycastCensus(r, func(AnycastPrefix) error { return nil }) },
 		},
 		{
