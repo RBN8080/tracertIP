@@ -27,8 +27,8 @@ type CityRange struct {
 
 // Airport is an IATA code with its coordinates (OurAirports).
 type Airport struct {
-	IATA, Name, City, Country string
-	Lat, Lon                  float64
+	IATA, Name, City, Country, Continent string
+	Lat, Lon                             float64
 }
 
 // ReadIPtoASN reads ip2asn-v4.tsv: range_start, range_end, AS_number,
@@ -121,7 +121,7 @@ func ReadIPinfoLite(r io.Reader, fn func(ASNRange) error) (int, error) {
 func ReadAirports(r io.Reader, fn func(Airport) error) (int, error) {
 	cr := csv.NewReader(r)
 	cr.ReuseRecord = true
-	col, err := header(cr, "name", "latitude_deg", "longitude_deg", "iso_country", "municipality", "iata_code")
+	col, err := header(cr, "name", "latitude_deg", "longitude_deg", "continent", "iso_country", "municipality", "iata_code")
 	if err != nil {
 		return 0, err
 	}
@@ -135,7 +135,7 @@ func ReadAirports(r io.Reader, fn func(Airport) error) (int, error) {
 			return false, err
 		}
 		return true, fn(Airport{IATA: strings.ToLower(iata), Name: f[col["name"]], City: f[col["municipality"]],
-			Country: f[col["iso_country"]], Lat: lat, Lon: lon})
+			Country: f[col["iso_country"]], Continent: f[col["continent"]], Lat: lat, Lon: lon})
 	})
 }
 
