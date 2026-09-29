@@ -81,16 +81,20 @@ func WriteJSON(w io.Writer, recs []HopRecord) error {
 
 // WriteTable writes one line per hop; '*' is a gap, never 0 ms.
 func WriteTable(w io.Writer, recs []HopRecord) {
+	width := len("[home]")
+	for _, r := range recs {
+		width = max(width, len(r.Addr)) // IPv6 addresses are up to 39 characters
+	}
 	for _, r := range recs {
 		switch {
 		case r.Home:
-			fmt.Fprintf(w, "%2d  %-15s %8s\n", r.TTL, "[home]", rtt(r.MinRTT))
+			fmt.Fprintf(w, "%2d  %-*s %8s\n", r.TTL, width, "[home]", rtt(r.MinRTT))
 			continue
 		case r.Addr == "":
 			fmt.Fprintf(w, "%2d  *\n", r.TTL)
 			continue
 		}
-		fmt.Fprintf(w, "%2d  %-15s %8s  %-26s %-28s %s\n", r.TTL, r.Addr, rtt(r.MinRTT), network(r), where(r), strings.Join(r.Flags, " "))
+		fmt.Fprintf(w, "%2d  %-*s %8s  %-26s %-28s %s\n", r.TTL, width, r.Addr, rtt(r.MinRTT), network(r), where(r), strings.Join(r.Flags, " "))
 		if s := r.Segment; s != nil && s.Efficiency > 0 && s.GainMs >= segmentNoteMs {
 			fmt.Fprintf(w, "    ^ from TTL %d: +%.1f ms over %.0f km, fiber minimum %.1f ms, efficiency %.2f (indicative)\n",
 				s.FromTTL, s.GainMs, s.Km, s.NeedMs, s.Efficiency)
