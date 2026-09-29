@@ -130,11 +130,10 @@ func choose(cs []Candidate, target bool, flags []string) (*Candidate, []string) 
 		c := &cs[i]
 		fromDB := len(c.Source) > 3 && c.Source[:3] == "db:"
 		switch {
+		case fromDB && !target:
+			// Routers never take the base's city, so its errors say nothing.
 		case !c.Possible && fromDB:
-			flags = append(flags, FlagDBImpossible)
-			if target {
-				flags = append(flags, FlagAnycast)
-			}
+			flags = append(flags, FlagDBImpossible, FlagAnycast)
 		case !c.Possible:
 			flags = append(flags, FlagImpossible)
 		case kept == nil && (!fromDB || target):
