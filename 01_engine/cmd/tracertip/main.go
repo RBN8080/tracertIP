@@ -27,6 +27,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "trace":
 		return runTrace(args[1:], stdout, stderr)
+	case "lookup":
+		return runLookup(args[1:], os.Stdin, stdout, stderr)
 	case "update-db":
 		return runUpdateDB(args[1:], stdout, stderr)
 	case "version":
@@ -46,6 +48,7 @@ func usage(w io.Writer) {
 
 commands:
   trace     trace the path to an IPv4 target (Linux, needs CAP_NET_RAW)
+  lookup    class, AS, name and location hints of IPv4 addresses
   update-db download and verify the local IP bases
   version   print the version
   help      print this help

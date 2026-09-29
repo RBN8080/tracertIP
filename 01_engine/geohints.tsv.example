@@ -1,0 +1,6 @@
+# tracertIP - local location hint table (template).
+# token<TAB>IATA code of the metro<TAB>source. Every row is an inference: the
+# judge only keeps it when physics allows it. Coordinates come from OurAirports
+# through the IATA code. Copy to <bases dir>/geohints.tsv and fill it with the
+# operator codes seen on your own paths.
+exmpla	lax	Example: operator code for a Los Angeles site, from its public naming
