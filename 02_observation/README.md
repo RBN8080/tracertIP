@@ -33,4 +33,4 @@ sudo sh start.sh targets.json config.json   # undo: sudo sh stop.sh
 
 **Status:** in preparation (targets, runs and service built; validity rules and the rehearsal next).
 
-*Updated: 2026-09-29 10:05 UTC.*
+*Updated: 2026-09-29 09:34 UTC.*
