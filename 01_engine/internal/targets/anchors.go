@@ -1,4 +1,4 @@
-// Package targets chooses the study's destinations: RIPE Atlas anchors, built
+// Package targets chooses measurement targets: RIPE Atlas anchors, built
 // to be measured and with a location their hosts declare (RIPE NCC, IPJ
 // 2015), that pass every check, spread over the continents, with a reserve.
 package targets
@@ -83,7 +83,7 @@ func ReadAnchors(r io.Reader) ([]Anchor, error) {
 var AnchorsURL = "https://atlas.ripe.net/api/v2/anchors/?format=json&page_size=500"
 
 // FetchAnchors follows the API's pages and returns the anchors and the raw
-// results as one JSON array, to be kept with the study (Paxson, IMC 2004).
+// results as one JSON array, to be kept with the data (Paxson, IMC 2004).
 func FetchAnchors(ctx context.Context, c *http.Client, userAgent string) ([]Anchor, []byte, error) {
 	var all []json.RawMessage
 	next := AnchorsURL

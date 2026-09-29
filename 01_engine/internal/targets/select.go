@@ -8,7 +8,7 @@ import (
 	"slices"
 )
 
-// Roles in the study.
+// Roles in a target list.
 const (
 	RoleStudy   = "study"
 	RoleReserve = "reserve" // replaces a study target of its continent, in order
@@ -41,7 +41,7 @@ func (t *Target) Add(name string, ok bool, format string, args ...any) {
 	t.Checks = append(t.Checks, Check{Name: name, OK: ok, Detail: fmt.Sprintf(format, args...)})
 }
 
-// Options are the selection rules (study instruction, D1).
+// Options are the selection rules.
 type Options struct {
 	Continents   []string // AF, AS, EU, NA, OC, SA
 	PerContinent int      // study targets per continent

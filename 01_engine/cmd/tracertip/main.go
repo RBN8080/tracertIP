@@ -33,8 +33,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runUpdateDB(args[1:], stdout, stderr)
 	case "targets":
 		return runTargets(args[1:], stdout, stderr)
-	case "study":
-		return runStudy(args[1:], stdout, stderr)
+	case "batch":
+		return runBatch(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, "tracertip", version())
 		return exitOK
@@ -54,8 +54,8 @@ commands:
   trace     trace the path to an IPv4 or IPv6 target (Linux, needs CAP_NET_RAW)
   lookup    class, AS, name and location hints of IP addresses
   update-db download and verify the local IP bases
-  targets   choose and check the study's destinations (RIPE Atlas anchors)
-  study     run the observation study: slots, alternating families, reserve
+  targets   choose and check measurement targets (RIPE Atlas anchors)
+  batch     trace a target list on fixed slots, alternating families, with a reserve
   version   print the version
   help      print this help
 `)

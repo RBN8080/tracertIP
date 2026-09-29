@@ -27,7 +27,7 @@ import (
 	"github.com/rbn8080/tracertip/01_engine/internal/targets"
 )
 
-// targetList is the validator's output, kept with the study.
+// targetList is the validator's output, kept with the data it leads to.
 type targetList struct {
 	V         int              `json:"v"`
 	Generated time.Time        `json:"generated"`

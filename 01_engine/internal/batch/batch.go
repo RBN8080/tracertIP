@@ -1,8 +1,8 @@
-// Package study keeps the observation study's schedule and state: runs on
-// fixed UTC slots that alternate the address family, the active targets,
-// and the replacement of a failing target by the reserve of its continent.
-// Everything it writes survives a power cut.
-package study
+// Package batch keeps the state of batch mode: runs over a target list on
+// fixed UTC slots that alternate the address family, and the replacement of
+// a failing target by the reserve of its continent. Everything it writes
+// survives a power cut.
+package batch
 
 import (
 	"encoding/json"
@@ -22,11 +22,11 @@ const (
 	V6 = "v6"
 )
 
-// FailLimit is how many runs of one family in a row a study target may miss
-// before the reserve replaces it (study instruction, D7).
+// FailLimit is the default number of runs of one family in a row a target
+// may miss before the reserve replaces it.
 const FailLimit = 4
 
-// Entry is one target in the study.
+// Entry is one target of the batch.
 type Entry struct {
 	ID        int        `json:"id,omitempty"` // anchor; 0 for a fixed target
 	Continent string     `json:"continent,omitempty"`
@@ -61,7 +61,7 @@ func (e Entry) key(fam string) string {
 	return e.Addr(fam).String()
 }
 
-// Replacement records a target leaving the study.
+// Replacement records a target leaving the batch.
 type Replacement struct {
 	V      int       `json:"v"`
 	Type   string    `json:"type"` // "replacement"
@@ -71,20 +71,21 @@ type Replacement struct {
 	Reason string    `json:"reason"`
 }
 
-// State is what the study remembers between runs and restarts.
+// State is what the batch remembers between runs and restarts.
 type State struct {
-	Active  []Entry            `json:"active"`
-	Reserve map[string][]Entry `json:"reserve"` // by continent, in rank order
-	Fails   map[string]int     `json:"fails"`   // runs missed in a row, by target and family
-	Runs    int                `json:"runs"`
-	LastRun time.Time          `json:"last_run,omitzero"` // slot of the last run
-	Checked string             `json:"checked,omitempty"` // UTC day of the last revalidation
+	FailLimit int                `json:"fail_limit"`
+	Active    []Entry            `json:"active"`
+	Reserve   map[string][]Entry `json:"reserve"` // by continent, in rank order
+	Fails     map[string]int     `json:"fails"`   // runs missed in a row, by target and family
+	Runs      int                `json:"runs"`
+	LastRun   time.Time          `json:"last_run,omitzero"` // slot of the last run
+	Checked   string             `json:"checked,omitempty"` // UTC day of the last revalidation
 }
 
 // NewState takes the validator's list: study and fixed targets that passed
 // every check become active; the reserve keeps its rank order.
 func NewState(list []targets.Target) (*State, error) {
-	s := &State{Reserve: map[string][]Entry{}, Fails: map[string]int{}}
+	s := &State{FailLimit: FailLimit, Reserve: map[string][]Entry{}, Fails: map[string]int{}}
 	for _, t := range list {
 		if !t.Passed() {
 			continue
@@ -104,8 +105,8 @@ func NewState(list []targets.Target) (*State, error) {
 	return s, nil
 }
 
-// Result records one trace. After FailLimit misses in a row, a study target
-// is swapped, in place, for the next reserve of its continent; fixed
+// Result records one trace. After s.FailLimit misses in a row, a study
+// target is swapped, in place, for the next reserve of its continent; fixed
 // targets are never replaced.
 func (s *State) Result(i int, fam string, reached bool, now time.Time) *Replacement {
 	e := s.Active[i]
@@ -115,10 +116,10 @@ func (s *State) Result(i int, fam string, reached bool, now time.Time) *Replacem
 		return nil
 	}
 	s.Fails[k]++
-	if s.Fails[k] < FailLimit {
+	if s.Fails[k] < s.FailLimit {
 		return nil
 	}
-	return s.Replace(i, fmt.Sprintf("no echo reply over %s in %d runs in a row", fam, FailLimit), now)
+	return s.Replace(i, fmt.Sprintf("no echo reply over %s in %d runs in a row", fam, s.FailLimit), now)
 }
 
 // Replace swaps a study target, in place, for the next reserve of its
@@ -245,14 +246,14 @@ func (r *RunFile) Abort() error {
 	return err
 }
 
-// ClockSynced says whether systemd-timesyncd has synchronized the clock; a
-// run without it is invalid (D7).
+// ClockSynced says whether systemd-timesyncd has synchronized the clock;
+// without it, wall times in the run cannot be trusted.
 func ClockSynced() bool {
 	_, err := os.Stat("/run/systemd/timesync/synchronized")
 	return err == nil
 }
 
-// Append adds JSON lines to path and syncs them (logs kept for the study).
+// Append adds JSON lines to path and syncs them.
 func Append(path string, recs ...any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

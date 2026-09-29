@@ -1,4 +1,4 @@
-package study
+package batch
 
 import (
 	"net/netip"
@@ -55,11 +55,11 @@ func TestReport(t *testing.T) {
 		t.Fatalf("days %+v", sum.Days)
 	}
 	d := sum.Days[0]
-	if d.Slots != 4 || d.Valid != 1 || d.NoClock != 1 || d.Incomplete != 1 || d.Gaps != 1 || d.Hot != 3 || !d.Invalid() || !sum.LowDisk {
+	if d.Slots != 4 || d.Complete != 1 || d.NoClock != 1 || d.Incomplete != 1 || d.Gaps != 1 || d.Hot != 3 || d.MinDiskMB != 900 {
 		t.Errorf("day %+v", d)
 	}
-	if again, why := sum.Repeat(); !again {
-		t.Errorf("3 of 4 slots without a valid run, yet no repeat (%s)", why)
+	if len(sum.Engines) != 1 || sum.Engines[0] != "e1" {
+		t.Errorf("engines %v", sum.Engines)
 	}
 }
 
@@ -80,7 +80,7 @@ func TestReplacement(t *testing.T) {
 		t.Fatalf("active %d, reserve %d: a failed candidate got in", len(s.Active), len(s.Reserve["EU"]))
 	}
 	now := time.Now()
-	for i := range FailLimit - 1 {
+	for i := range s.FailLimit - 1 {
 		if r := s.Result(0, V6, false, now); r != nil {
 			t.Fatalf("replaced after %d misses", i+1)
 		}
@@ -90,13 +90,13 @@ func TestReplacement(t *testing.T) {
 	if r == nil || r.In == nil || r.In.ID != 2 || s.Active[0].ID != 2 || s.Active[0].Role != targets.RoleStudy {
 		t.Fatalf("replacement %+v, active %+v", r, s.Active[0])
 	}
-	for range FailLimit {
+	for range s.FailLimit {
 		s.Result(0, V4, false, now)
 	}
 	if len(s.Active) != 1 || s.Active[0].Role != targets.RoleFixed {
 		t.Errorf("with the reserve spent, the target leaves: %+v", s.Active)
 	}
-	for range 2 * FailLimit {
+	for range 2 * s.FailLimit {
 		if s.Result(0, V4, false, now) != nil {
 			t.Fatal("a fixed target was replaced")
 		}

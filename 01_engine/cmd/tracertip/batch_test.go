@@ -13,15 +13,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rbn8080/tracertip/01_engine/internal/batch"
 	"github.com/rbn8080/tracertip/01_engine/internal/enrich"
 	"github.com/rbn8080/tracertip/01_engine/internal/probe"
-	"github.com/rbn8080/tracertip/01_engine/internal/study"
 	"github.com/rbn8080/tracertip/01_engine/internal/targets"
 )
 
 // A target that never answers is replaced by the reserve after FailLimit
 // runs; every run leaves a whole file and the replacement is logged.
-func TestStudyReplacesUnreachable(t *testing.T) {
+func TestBatchReplacesUnreachable(t *testing.T) {
 	defer func(o func(netip.Addr) (probe.Conn, error)) { open = o }(open)
 	open = func(netip.Addr) (probe.Conn, error) { return nil, errors.New("no socket in tests") }
 
@@ -38,18 +38,18 @@ func TestStudyReplacesUnreachable(t *testing.T) {
 	file := filepath.Join(dir, "list.json")
 	os.WriteFile(file, b, 0o644)
 	state := filepath.Join(dir, "study")
-	st, err := openState(state, file)
+	st, err := openState(state, file, batch.FailLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
 	o := &observer{dir: state, st: st, rounds: 1, log: io.Discard, known: map[netip.Addr]enrich.Info{}}
 	slot := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
-	for i := range study.FailLimit {
-		if err := o.run(context.Background(), slot.Add(time.Duration(i)*time.Hour), study.V4); err != nil {
+	for i := range batch.FailLimit {
+		if err := o.run(context.Background(), slot.Add(time.Duration(i)*time.Hour), batch.V4); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if st.Active[0].ID != 2 || st.Runs != study.FailLimit {
+	if st.Active[0].ID != 2 || st.Runs != batch.FailLimit {
 		t.Errorf("active %+v after %d runs", st.Active, st.Runs)
 	}
 	log, err := os.ReadFile(filepath.Join(state, "replacements.jsonl"))
@@ -71,7 +71,7 @@ func TestStudyReplacesUnreachable(t *testing.T) {
 	if strings.Join(types, ",") != "run,error,run_end" {
 		t.Errorf("run file records %v", types)
 	}
-	again, err := openState(state, "")
+	again, err := openState(state, "", batch.FailLimit)
 	if err != nil || again.Active[0].ID != 2 {
 		t.Errorf("state not resumed: %+v, %v", again, err)
 	}

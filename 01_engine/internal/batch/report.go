@@ -1,4 +1,4 @@
-package study
+package batch
 
 import (
 	"bufio"
@@ -11,59 +11,31 @@ import (
 	"time"
 )
 
-// Validity thresholds (study instruction, V1-V6).
-const (
-	maxLateS      = 300
-	hotC          = 80 // the Pi starts throttling at 80 °C (Raspberry Pi documentation)
-	lowDiskMB     = 1024
-	maxDayMissing = 0.10
-	maxMissing    = 0.20
-)
+// hotC: the Pi starts throttling at 80 °C (Raspberry Pi documentation).
+const hotC = 80
 
-// Day sums up one UTC day of runs.
+// Day sums up one UTC day of runs. It states facts; judging them is up to
+// whoever runs the batch.
 type Day struct {
 	Day        string
 	Slots      int // expected so far
-	Valid      int // V1
-	Incomplete int // .partial or .aborted (V3)
-	NoClock    int // V2
-	Late       int
-	Short      int // traced fewer targets than expected
-	Gaps       int // slots without any run (V4)
-	Hot        int // runs at 80 °C or more (V5)
+	Complete   int // whole file, NTP time, every expected target traced
+	Incomplete int // cut short: .partial or .aborted
+	NoClock    int // whole, but without NTP time
+	Short      int // whole, but fewer targets traced than expected
+	Gaps       int // slots without any run
+	MaxLateS   float64
+	Hot        int // runs started at 80 °C or more
 	MaxTempC   float64
 	MinDiskMB  int64
 	Replaced   int
 }
 
-// Invalid says whether the day misses too many valid runs (V4).
-func (d Day) Invalid() bool {
-	return d.Slots > 0 && float64(d.Slots-d.Valid)/float64(d.Slots) > maxDayMissing
-}
-
-// Summary is the whole study so far.
+// Summary is the whole batch so far.
 type Summary struct {
 	Days    []Day
-	Engines []string // more than one: the engine changed (V6)
-	Bases   []string // more than one: the bases changed (V6)
-	LowDisk bool
-}
-
-// Repeat says whether the study must be run again (V6).
-func (s Summary) Repeat() (bool, string) {
-	slots, valid := 0, 0
-	for _, d := range s.Days {
-		slots, valid = slots+d.Slots, valid+d.Valid
-	}
-	switch {
-	case len(s.Engines) > 1:
-		return true, "the engine changed: " + strings.Join(s.Engines, ", ")
-	case len(s.Bases) > 1:
-		return true, "the bases changed"
-	case slots > 0 && float64(slots-valid)/float64(slots) > maxMissing:
-		return true, "more than 20% of the slots have no valid run"
-	}
-	return false, ""
+	Engines []string // engine versions seen in the run headers
+	Bases   []string // SHA-256 of the bases' lists seen in the run headers
 }
 
 type runLine struct {
@@ -80,7 +52,7 @@ type runLine struct {
 	Time        time.Time `json:"time"`
 }
 
-// Report reads the study folder: run files by day, and the replacement log.
+// Report reads a batch folder: run files by day, and the replacement log.
 func Report(dir string, every time.Duration, now time.Time) (Summary, error) {
 	var sum Summary
 	files, err := filepath.Glob(filepath.Join(dir, "runs", "*", "*Z-v?.jsonl*"))
@@ -116,19 +88,17 @@ func Report(dir string, every time.Duration, now time.Time) (Summary, error) {
 		if head.BasesSHA256 != "" && !slices.Contains(sum.Bases, head.BasesSHA256) {
 			sum.Bases = append(sum.Bases, head.BasesSHA256)
 		}
+		d.MaxLateS = max(d.MaxLateS, head.LateS)
 		switch {
-		case strings.HasSuffix(f, ".jsonl") && end != nil && head.ClockSynced && head.LateS <= maxLateS && end.Traced == head.Targets:
-			d.Valid++
 		case !strings.HasSuffix(f, ".jsonl") || end == nil:
 			d.Incomplete++
 		case !head.ClockSynced:
 			d.NoClock++
-		case head.LateS > maxLateS:
-			d.Late++
-		default:
+		case end.Traced < head.Targets:
 			d.Short++
+		default:
+			d.Complete++
 		}
-		sum.LowDisk = sum.LowDisk || (head.DiskFreeMB > 0 && head.DiskFreeMB < lowDiskMB)
 	}
 	if !first.IsZero() {
 		for s := first; !s.After(now); s = s.Add(every) {

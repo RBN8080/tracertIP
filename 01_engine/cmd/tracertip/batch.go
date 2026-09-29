@@ -17,11 +17,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rbn8080/tracertip/01_engine/internal/batch"
 	"github.com/rbn8080/tracertip/01_engine/internal/enrich"
 	"github.com/rbn8080/tracertip/01_engine/internal/ipdb"
 	"github.com/rbn8080/tracertip/01_engine/internal/model"
 	"github.com/rbn8080/tracertip/01_engine/internal/probe"
-	"github.com/rbn8080/tracertip/01_engine/internal/study"
 	"github.com/rbn8080/tracertip/01_engine/internal/targets"
 )
 
@@ -34,7 +34,7 @@ type runHeader struct {
 	Start       time.Time `json:"start"`
 	LateS       float64   `json:"late_s"` // start after the slot began
 	Engine      string    `json:"engine"`
-	ClockSynced bool      `json:"clock_synced"` // false: the run is invalid (D7)
+	ClockSynced bool      `json:"clock_synced"` // false: wall times cannot be trusted
 	TempC       float64   `json:"temp_c,omitempty"`
 	DiskFreeMB  int64     `json:"disk_free_mb,omitempty"`
 	BasesSHA256 string    `json:"bases_sha256,omitempty"` // of the frozen copy's SHA256SUMS
@@ -57,12 +57,12 @@ type traceError struct {
 	Error  string    `json:"error"`
 }
 
-// observer runs the study: one run per slot over the active targets in the
+// observer runs batch mode: one run per slot over the active targets in the
 // slot's family, one target at a time (frontier 1.bis), and short traces of
 // the fixed targets between them.
 type observer struct {
 	dir    string // state and data
-	st     *study.State
+	st     *batch.State
 	cfg    config
 	opts   enrich.Options
 	known  map[netip.Addr]enrich.Info
@@ -74,30 +74,31 @@ type observer struct {
 	bgp    func(context.Context, netip.Addr) (targets.Routing, error) // nil: no daily check
 }
 
-func runStudy(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("study", flag.ContinueOnError)
+func runBatch(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("batch", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	list := fs.String("targets", "", "target list from tracertip targets (read once, when the state is new)")
-	dir := fs.String("state", "", "folder for the study's state and data")
+	dir := fs.String("state", "", "folder for the state and the data")
 	every := fs.Duration("every", 30*time.Minute, "run slot; runs alternate IPv4 and IPv6")
 	rounds := fs.Int("rounds", 10, "rounds per trace")
 	short := fs.Duration("short", 5*time.Minute, "fixed targets: a 2-round trace this often (0 = off)")
 	once := fs.Bool("once", false, "run the current slot and stop")
-	report := fs.Bool("report", false, "check the runs so far against the validity rules and stop")
+	failLimit := fs.Int("fail-limit", batch.FailLimit, "runs of one family in a row a target may miss before the reserve replaces it (new state only)")
+	report := fs.Bool("report", false, "sum up the runs so far by day and stop")
 	cfgPath := fs.String("config", defaultConfigPath(), "configuration file (origin, access ISP, resolver, bases)")
-	bases := fs.String("dir", "", "folder with the bases, fixed for the study (default: config)")
+	bases := fs.String("dir", "", "folder with the bases (default: config)")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: tracertip study -state <dir> [-targets <file>] [flags]")
+		fmt.Fprintln(stderr, "usage: tracertip batch -state <dir> [-targets <file>] [flags]")
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *dir == "" || *every < time.Minute || *rounds < 1 || *rounds > 100 || *short < 0 {
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *dir == "" || *every < time.Minute || *rounds < 1 || *rounds > 100 || *short < 0 || *failLimit < 1 {
 		if err == nil {
 			fs.Usage()
 		}
 		return exitUsage
 	}
 	if *report {
-		return studyReport(*dir, *every, stdout, stderr)
+		return batchReport(*dir, *every, stdout, stderr)
 	}
 	explicit := false
 	fs.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "config" })
@@ -107,10 +108,10 @@ func runStudy(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if cfg.Origin == nil {
-		fmt.Fprintln(stderr, "tracertip: the study needs the origin in the configuration")
+		fmt.Fprintln(stderr, "tracertip: batch mode needs the origin in the configuration")
 		return exitUsage
 	}
-	st, err := openState(*dir, *list)
+	st, err := openState(*dir, *list, *failLimit)
 	if err != nil {
 		fmt.Fprintln(stderr, "tracertip:", err)
 		return exitFail
@@ -127,7 +128,7 @@ func runStudy(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	for {
-		slot, fam := study.Slot(time.Now(), *every)
+		slot, fam := batch.Slot(time.Now(), *every)
 		if st.LastRun.Before(slot) {
 			if err := o.run(ctx, slot, fam); err != nil {
 				if ctx.Err() != nil {
@@ -147,11 +148,11 @@ func runStudy(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// openState resumes the study, or starts it from the target list and keeps
+// openState resumes the batch, or starts it from the target list and keeps
 // a copy of the list with the data.
-func openState(dir, list string) (*study.State, error) {
+func openState(dir, list string, failLimit int) (*batch.State, error) {
 	path := filepath.Join(dir, "state.json")
-	st, err := study.LoadState(path)
+	st, err := batch.LoadState(path)
 	if err != nil || st != nil {
 		return st, err
 	}
@@ -166,9 +167,10 @@ func openState(dir, list string) (*study.State, error) {
 	if err := json.Unmarshal(b, &l); err != nil {
 		return nil, fmt.Errorf("%s: %w", list, err)
 	}
-	if st, err = study.NewState(l.Targets); err != nil {
+	if st, err = batch.NewState(l.Targets); err != nil {
 		return nil, err
 	}
+	st.FailLimit = failLimit
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -193,8 +195,7 @@ type bgpCheck struct {
 
 // revalidate asks RIPEstat, once a UTC day, whether each target's prefixes
 // are still announced by one AS, the declared one; a study target that fails
-// is replaced (D7). The answers are kept per day: they are also the BGP side
-// of T1.
+// is replaced. The answers are kept per day, as the BGP side of the paths.
 func (o *observer) revalidate(ctx context.Context, day string) error {
 	if o.bgp == nil || o.st.Checked == day {
 		return nil
@@ -203,7 +204,7 @@ func (o *observer) revalidate(ctx context.Context, day string) error {
 	answered := 0
 	for i := 0; i < len(o.st.Active); i++ {
 		e := o.st.Active[i]
-		for _, fam := range []string{study.V4, study.V6} {
+		for _, fam := range []string{batch.V4, batch.V6} {
 			a := e.Addr(fam)
 			if !a.IsValid() {
 				continue
@@ -226,7 +227,7 @@ func (o *observer) revalidate(ctx context.Context, day string) error {
 				continue // fixed targets stay
 			}
 			recs = append(recs, rep)
-			if err := study.Append(filepath.Join(o.dir, "replacements.jsonl"), rep); err != nil {
+			if err := batch.Append(filepath.Join(o.dir, "replacements.jsonl"), rep); err != nil {
 				return err
 			}
 			if rep.In == nil {
@@ -235,7 +236,7 @@ func (o *observer) revalidate(ctx context.Context, day string) error {
 			break
 		}
 	}
-	if err := study.Append(filepath.Join(o.dir, "bgp", day+".jsonl"), recs...); err != nil {
+	if err := batch.Append(filepath.Join(o.dir, "bgp", day+".jsonl"), recs...); err != nil {
 		return err
 	}
 	if answered == 0 {
@@ -251,12 +252,12 @@ func (o *observer) run(ctx context.Context, slot time.Time, fam string) error {
 	if err := o.revalidate(ctx, o.day); err != nil {
 		return err
 	}
-	rf, err := study.CreateRun(filepath.Join(o.dir, "runs"), slot, fam)
+	rf, err := batch.CreateRun(filepath.Join(o.dir, "runs"), slot, fam)
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC()
-	temp, free := study.Health(o.dir)
+	temp, free := batch.Health(o.dir)
 	want := 0
 	for _, e := range o.st.Active {
 		if e.Addr(fam).IsValid() {
@@ -264,7 +265,7 @@ func (o *observer) run(ctx context.Context, slot time.Time, fam string) error {
 		}
 	}
 	h := runHeader{V: 1, Type: "run", Slot: slot, Family: fam, Start: now, LateS: now.Sub(slot).Seconds(),
-		Engine: version(), ClockSynced: study.ClockSynced(), TempC: temp, DiskFreeMB: free, Targets: want}
+		Engine: version(), ClockSynced: batch.ClockSynced(), TempC: temp, DiskFreeMB: free, Targets: want}
 	if b, err := os.ReadFile(filepath.Join(o.opts.Dir, "SHA256SUMS")); err == nil {
 		sum := sha256.Sum256(b)
 		h.BasesSHA256 = hex.EncodeToString(sum[:])
@@ -298,7 +299,7 @@ func (o *observer) run(ctx context.Context, slot time.Time, fam string) error {
 		if r := o.st.Result(i, fam, reached, time.Now()); r != nil {
 			fmt.Fprintf(o.log, "tracertip: %s replaced: %s\n", a, r.Reason)
 			rf.Write(r)
-			if err := study.Append(filepath.Join(o.dir, "replacements.jsonl"), r); err != nil {
+			if err := batch.Append(filepath.Join(o.dir, "replacements.jsonl"), r); err != nil {
 				rf.Abort()
 				return err
 			}
@@ -376,7 +377,7 @@ func (o *observer) shortTraces(ctx context.Context) error {
 		if e.Role != targets.RoleFixed {
 			continue
 		}
-		for _, fam := range []string{study.V4, study.V6} {
+		for _, fam := range []string{batch.V4, batch.V6} {
 			a := e.Addr(fam)
 			if !a.IsValid() {
 				continue
@@ -390,7 +391,7 @@ func (o *observer) shortTraces(ctx context.Context) error {
 				recs = append(recs, traceError{V: 1, Type: "error", Time: time.Now().UTC(), Target: a.String(), Error: err.Error()})
 			}
 			day := time.Now().UTC().Format("2006-01-02")
-			if err := study.Append(filepath.Join(o.dir, "short", day+".jsonl"), recs...); err != nil {
+			if err := batch.Append(filepath.Join(o.dir, "short", day+".jsonl"), recs...); err != nil {
 				return err
 			}
 		}
@@ -425,7 +426,7 @@ func (o *observer) idle(ctx context.Context, next time.Time) error {
 }
 
 // newDay forgets the enrichment each UTC day, so names and IPmap answers are
-// asked again and each day's data carries its own (T3).
+// asked again and each day's data carries its own.
 func (o *observer) newDay(slot time.Time) {
 	if d := slot.UTC().Format("2006-01-02"); d != o.day {
 		o.day, o.known = d, map[netip.Addr]enrich.Info{}
@@ -444,32 +445,20 @@ func (o *observer) keepIPmap(slot time.Time) {
 	}
 }
 
-// studyReport prints each day against the validity rules and the verdict:
-// exit 0 to go on, 1 when the study must be repeated (V6).
-func studyReport(dir string, every time.Duration, stdout, stderr io.Writer) int {
-	sum, err := study.Report(dir, every, time.Now())
+// batchReport prints the runs so far by day. It states facts; the rules
+// that judge them belong to whoever runs the batch.
+func batchReport(dir string, every time.Duration, stdout, stderr io.Writer) int {
+	sum, err := batch.Report(dir, every, time.Now())
 	if err != nil {
 		fmt.Fprintln(stderr, "tracertip:", err)
 		return exitFail
 	}
-	fmt.Fprintf(stdout, "%-10s %5s %5s %10s %8s %4s %5s %4s %3s %6s %8s %8s  %s\n",
-		"day", "slots", "valid", "incomplete", "no-clock", "late", "short", "gaps", "hot", "max°C", "min-disk", "replaced", "status")
+	fmt.Fprintf(stdout, "%-10s %5s %8s %10s %8s %5s %4s %7s %3s %6s %8s %8s\n",
+		"day", "slots", "complete", "incomplete", "no-clock", "short", "gaps", "late-s", "hot", "max°C", "min-disk", "replaced")
 	for _, d := range sum.Days {
-		status := "ok"
-		if d.Invalid() {
-			status = "INVALID"
-		}
-		fmt.Fprintf(stdout, "%-10s %5d %5d %10d %8d %4d %5d %4d %3d %6.1f %6dMB %8d  %s\n",
-			d.Day, d.Slots, d.Valid, d.Incomplete, d.NoClock, d.Late, d.Short, d.Gaps, d.Hot, d.MaxTempC, d.MinDiskMB, d.Replaced, status)
+		fmt.Fprintf(stdout, "%-10s %5d %8d %10d %8d %5d %4d %7.0f %3d %6.1f %6dMB %8d\n",
+			d.Day, d.Slots, d.Complete, d.Incomplete, d.NoClock, d.Short, d.Gaps, d.MaxLateS, d.Hot, d.MaxTempC, d.MinDiskMB, d.Replaced)
 	}
-	fmt.Fprintf(stdout, "engine: %s; frozen bases seen: %d\n", strings.Join(sum.Engines, ", "), len(sum.Bases))
-	if sum.LowDisk {
-		fmt.Fprintln(stdout, "alert: less than 1 GB free")
-	}
-	if again, why := sum.Repeat(); again {
-		fmt.Fprintln(stdout, "verdict: REPEAT the study:", why)
-		return exitFail
-	}
-	fmt.Fprintln(stdout, "verdict: go on")
+	fmt.Fprintf(stdout, "engine: %s\nbases lists seen: %d\n", strings.Join(sum.Engines, ", "), len(sum.Bases))
 	return exitOK
 }
