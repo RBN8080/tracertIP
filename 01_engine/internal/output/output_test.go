@@ -56,3 +56,23 @@ func TestPublicHidesHome(t *testing.T) {
 		t.Errorf("private output hid hop 3: %+v", priv[2])
 	}
 }
+
+// A long gain within one metro is not explained by distance, so it gets no
+// efficiency (Georgia Tech by IPv6: +44.7 ms over 13 km).
+func TestSegmentNote(t *testing.T) {
+	rec := func(s judge.Segment) HopRecord {
+		return HopRecord{Verdict: judge.Verdict{TTL: 5, Addr: "192.0.2.1", MinRTT: 60, Segment: &s}}
+	}
+	var b bytes.Buffer
+	WriteTable(&b, []HopRecord{
+		rec(judge.Segment{FromTTL: 4, Km: 13, NeedMs: 0.13, GainMs: 44.7, Efficiency: 0.003}),
+		rec(judge.Segment{FromTTL: 4, Km: 12061, NeedMs: 118.1, GainMs: 132, Efficiency: 0.89}),
+	})
+	lines := strings.Split(b.String(), "\n")
+	if !strings.Contains(lines[1], "within 13 km: not distance") || strings.Contains(lines[1], "efficiency") {
+		t.Errorf("same metro: %q", lines[1])
+	}
+	if !strings.Contains(lines[3], "efficiency 0.89") {
+		t.Errorf("ocean jump: %q", lines[3])
+	}
+}

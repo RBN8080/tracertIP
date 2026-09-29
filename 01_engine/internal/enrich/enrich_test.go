@@ -49,8 +49,10 @@ func testHints() *Hints {
 			"anx": ap("anx", "Andenes", "NO", 69.29, 16.14), // decoy: "anx18" in an .au name
 			"nsw": ap("nsw", "Decoy", "ZZ", 0, 0),           // decoy: state label "nsw"
 			"gin": ap("gin", "Decoy", "ZZ", 0, 0),
+			"iad": ap("iad", "Washington", "US", 38.94, -77.46),
+			"ash": ap("ash", "Nashua", "US", 42.78, -71.51), // IATA ASH; he.net "ash" is Ashburn
 		},
-		table: map[string]string{"lsanca": "lax", "dllstx": "dfw", "alxd": "syd"},
+		table: map[string]string{"lsanca": "lax", "dllstx": "dfw", "alxd": "syd", "ash.he.net": "iad"},
 	}
 }
 
@@ -62,6 +64,8 @@ func TestHints(t *testing.T) {
 		"ae-13.r22.dllstx14.us.bb.gin.ntt.net": {"dfw"},
 		"et-3-0-2.pe1.alxd.nsw.aarnet.net.au":  {"syd"},
 		"core1.lax2.example.com":               {"lax"},
+		"100ge0-0-0-2.core4.ash1.he.net":       {"iad"}, // entry scoped to he.net
+		"core1.ash1.example.net":               {"ash"}, // other operators keep IATA
 		"mirror.aarnet.edu.au":                 nil,
 		"customer-192-0-2-88.example.net.mx":   nil,
 	} {
@@ -71,6 +75,20 @@ func TestHints(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: %v, want %v", name, got, want)
+		}
+	}
+}
+
+// Only a bare IATA guess is weak: a country label or a table entry backs it.
+func TestHintWeak(t *testing.T) {
+	h := testHints()
+	for name, want := range map[string]bool{
+		"core1.lax2.example.com":           true,
+		"dcr02.anx18.syd.au.anexia-it.net": false,
+		"core4.ash1.he.net":                false,
+	} {
+		if p := h.For(name); len(p) != 1 || p[0].Weak != want {
+			t.Errorf("%s: %+v, want weak=%v", name, p, want)
 		}
 	}
 }

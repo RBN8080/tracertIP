@@ -22,12 +22,16 @@ type Place struct {
 	Country string  `json:"country"`
 	Lat     float64 `json:"lat"`
 	Lon     float64 `json:"lon"`
-	Source  string  `json:"source"` // "iata" or "table"
+	Source  string  `json:"source"`         // "iata" or "table"
+	Weak    bool    `json:"weak,omitempty"` // a bare IATA guess: no country label, no table entry
 }
 
 // Hints resolves hostname tokens to places: IATA codes from OurAirports and a
 // local table for operator codes without public coordinates (for example
-// CLLI-style "lsanca"). The table maps a token to an IATA code of the metro.
+// CLLI-style "lsanca"). The table maps a token to an IATA code of the metro;
+// "token.domain" applies to one operator only (he.net uses "ash" for Ashburn,
+// while IATA ASH is Nashua), as Hoiho learns rules per domain (Luckie et al.,
+// CoNEXT 2021).
 type Hints struct {
 	airports map[string]ipdb.Airport
 	table    map[string]string
@@ -98,7 +102,7 @@ func (h *Hints) For(host string) []Place {
 	if n <= cut {
 		return nil
 	}
-	hostLabels := labels[:n-cut]
+	hostLabels, domain := labels[:n-cut], strings.Join(labels[n-cut:], ".")
 	for _, l := range hostLabels {
 		if len(l) == 2 && isLetters(l) {
 			countries[l] = true
@@ -112,7 +116,10 @@ func (h *Hints) For(host string) []Place {
 			if tok == "" || !isLetters(tok) {
 				continue
 			}
-			iata, src := h.table[tok], "table"
+			iata, src := h.table[tok+"."+domain], "table"
+			if iata == "" {
+				iata = h.table[tok]
+			}
 			if iata == "" && len(tok) == 3 {
 				iata, src = tok, "iata"
 			}
@@ -124,7 +131,8 @@ func (h *Hints) For(host string) []Place {
 				continue
 			}
 			seen[iata] = true
-			out = append(out, Place{Token: tok, IATA: iata, City: a.City, Country: a.Country, Lat: a.Lat, Lon: a.Lon, Source: src})
+			out = append(out, Place{Token: tok, IATA: iata, City: a.City, Country: a.Country, Lat: a.Lat, Lon: a.Lon, Source: src,
+				Weak: src == "iata" && len(countries) == 0})
 		}
 	}
 	return out

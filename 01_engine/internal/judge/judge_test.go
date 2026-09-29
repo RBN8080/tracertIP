@@ -85,3 +85,16 @@ func TestJudge(t *testing.T) {
 		t.Errorf("without an origin nothing is judged: %+v", got[1])
 	}
 }
+
+// A bare IATA guess that physics rules out is dropped without a flag ("ldn"
+// read as Lamidanda, Nepal, for a London router).
+func TestWeakGuess(t *testing.T) {
+	a := netip.MustParseAddr("192.0.2.1")
+	guess := place("syd", syd, "AU")
+	guess.Weak = true
+	v := Judge([]Hop{{TTL: 1, Addrs: []netip.Addr{a}, MinRTT: 10}},
+		map[netip.Addr]enrich.Info{a: {Class: enrich.ClassPublic, Places: []enrich.Place{guess}}}, &dfw)
+	if v[0].Location != nil || slices.Contains(v[0].Flags, FlagImpossible) {
+		t.Errorf("weak guess: %+v", v[0])
+	}
+}

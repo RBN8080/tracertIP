@@ -16,9 +16,10 @@ import (
 func runLookup(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("lookup", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dir := fs.String("dir", defaultBasesDir(), "folder with the bases (update-db)")
+	cfgPath := fs.String("config", defaultConfigPath(), "configuration file (resolver, bases)")
+	dir := fs.String("dir", "", "folder with the bases (default: config, then the user cache)")
 	hints := fs.String("hints", "", "hint table (default: <dir>/geohints.tsv)")
-	resolver := fs.String("resolver", "", "DNS server for names, host:port (default: system)")
+	resolver := fs.String("resolver", "", "DNS server for names, host:port (default: config, then system)")
 	noDNS := fs.Bool("no-dns", false, "do not look up names")
 	jsonOut := fs.Bool("json", false, "write one JSON object per address")
 	fs.Usage = func() {
@@ -29,6 +30,13 @@ func runLookup(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if err == nil {
 			fs.Usage()
 		}
+		return exitUsage
+	}
+	explicit := false
+	fs.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "config" })
+	cfg, err := loadConfig(*cfgPath, explicit)
+	if err != nil {
+		fmt.Fprintln(stderr, "tracertip:", err)
 		return exitUsage
 	}
 	words := fs.Args()
@@ -49,7 +57,7 @@ func runLookup(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		addrs = append(addrs, a.Unmap())
 	}
 	info, err := enrich.Enrich(context.Background(), addrs,
-		enrich.Options{Dir: *dir, Hints: *hints, Resolver: *resolver, NoDNS: *noDNS})
+		enrich.Options{Dir: first(*dir, cfg.Bases, defaultBasesDir()), Hints: *hints, Resolver: first(*resolver, cfg.Resolver), NoDNS: *noDNS})
 	if err != nil {
 		fmt.Fprintln(stderr, "tracertip:", err)
 		return exitFail
@@ -95,7 +103,11 @@ func describe(inf enrich.Info) string {
 		parts = append(parts, inf.Name)
 	}
 	for _, p := range inf.Places {
-		parts = append(parts, fmt.Sprintf("hint %s=%s, %s [%s]", p.Token, p.City, p.Country, p.Source))
+		src := p.Source
+		if p.Weak {
+			src += ", guess"
+		}
+		parts = append(parts, fmt.Sprintf("hint %s=%s, %s [%s]", p.Token, p.City, p.Country, src))
 	}
 	if c := inf.DBCity; c != nil {
 		parts = append(parts, fmt.Sprintf("db %s, %s", c.City, c.Country))

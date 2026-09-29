@@ -95,7 +95,12 @@ func WriteTable(w io.Writer, recs []HopRecord) {
 			continue
 		}
 		fmt.Fprintf(w, "%2d  %-*s %8s  %-26s %-28s %s\n", r.TTL, width, r.Addr, rtt(r.MinRTT), network(r), where(r), strings.Join(r.Flags, " "))
-		if s := r.Segment; s != nil && s.Efficiency > 0 && s.GainMs >= segmentNoteMs {
+		switch s := r.Segment; {
+		case s == nil || s.GainMs < segmentNoteMs:
+		case s.NeedMs < localMs:
+			fmt.Fprintf(w, "    ^ from TTL %d: +%.1f ms within %.0f km: not distance (detour, queueing or return path)\n",
+				s.FromTTL, s.GainMs, s.Km)
+		default:
 			fmt.Fprintf(w, "    ^ from TTL %d: +%.1f ms over %.0f km, fiber minimum %.1f ms, efficiency %.2f (indicative)\n",
 				s.FromTTL, s.GainMs, s.Km, s.NeedMs, s.Efficiency)
 		}
@@ -104,6 +109,9 @@ func WriteTable(w io.Writer, recs []HopRecord) {
 
 // segmentNoteMs: segments that add less than this are not worth a line.
 const segmentNoteMs = 20
+
+// localMs: under 1 ms of fiber (about 100 km), distance explains none of the gain.
+const localMs = 1
 
 func rtt(ms float64) string {
 	if ms < 0 {

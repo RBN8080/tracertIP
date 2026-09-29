@@ -17,6 +17,7 @@ type Candidate struct {
 	Km       float64 `json:"km"`     // from the origin
 	NeedMs   float64 `json:"need_ms"`
 	Possible bool    `json:"possible"`
+	Weak     bool    `json:"weak,omitempty"` // a bare IATA guess from the name
 }
 
 // Segment is the stretch from the previous located hop. Efficiency compares
@@ -116,7 +117,7 @@ func candidates(inf enrich.Info, origin Coord, rtt float64) []Candidate {
 		cs = append(cs, c)
 	}
 	for _, p := range inf.Places {
-		add(Candidate{City: p.City, Country: p.Country, Lat: p.Lat, Lon: p.Lon,
+		add(Candidate{City: p.City, Country: p.Country, Lat: p.Lat, Lon: p.Lon, Weak: p.Weak,
 			Source: fmt.Sprintf("name:%s:%s", p.Source, p.Token)})
 	}
 	if c := inf.DBCity; c != nil {
@@ -136,6 +137,9 @@ func choose(cs []Candidate, target bool, flags []string) (*Candidate, []string) 
 		switch {
 		case fromDB && !target:
 			// Routers never take the base's city, so its errors say nothing.
+		case !c.Possible && c.Weak:
+			// A bare three-letter guess that physics rules out is a wrong guess,
+			// not a wrong router.
 		case !c.Possible && fromDB:
 			flags = append(flags, FlagDBImpossible, FlagAnycast)
 		case !c.Possible:
