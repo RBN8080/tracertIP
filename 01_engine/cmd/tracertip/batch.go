@@ -46,6 +46,7 @@ type runEnd struct {
 	Type    string    `json:"type"` // "run_end"
 	Time    time.Time `json:"time"`
 	Traced  int       `json:"traced"`
+	Skipped int       `json:"skipped,omitempty"` // left for lack of time before the next slot
 	Reached int       `json:"reached"`
 }
 
@@ -68,6 +69,7 @@ type observer struct {
 	known  map[netip.Addr]enrich.Info
 	day    string
 	rounds int
+	every  time.Duration
 	short  time.Duration
 	last   time.Time // last short trace
 	log    io.Writer
@@ -116,7 +118,7 @@ func runBatch(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "tracertip:", err)
 		return exitFail
 	}
-	o := &observer{dir: *dir, st: st, cfg: cfg, rounds: *rounds, short: *short, log: stderr,
+	o := &observer{dir: *dir, st: st, cfg: cfg, rounds: *rounds, every: *every, short: *short, log: stderr,
 		opts: enrichOptions(cfg, *bases, "", false, false), known: map[netip.Addr]enrich.Info{}}
 	o.opts.NoCity = true
 	o.opts.IPmapCache = filepath.Join(*dir, "ipmap-cache.json")
@@ -134,6 +136,14 @@ func runBatch(args []string, stdout, stderr io.Writer) int {
 				if ctx.Err() != nil {
 					return exitOK // stopped: the run stays .partial
 				}
+				fmt.Fprintln(stderr, "tracertip:", err)
+				return exitFail
+			}
+			// The daily BGP check uses the gap before the next slot, never a run's time.
+			rctx, cancel := context.WithDeadline(ctx, slot.Add(*every))
+			err := o.revalidate(rctx, o.day)
+			cancel()
+			if err != nil && ctx.Err() == nil {
 				fmt.Fprintln(stderr, "tracertip:", err)
 				return exitFail
 			}
@@ -249,9 +259,6 @@ func (o *observer) revalidate(ctx context.Context, day string) error {
 // run traces every active target with an address in fam, in order.
 func (o *observer) run(ctx context.Context, slot time.Time, fam string) error {
 	o.newDay(slot)
-	if err := o.revalidate(ctx, o.day); err != nil {
-		return err
-	}
 	rf, err := batch.CreateRun(filepath.Join(o.dir, "runs"), slot, fam)
 	if err != nil {
 		return err
@@ -275,9 +282,18 @@ func (o *observer) run(ctx context.Context, slot time.Time, fam string) error {
 		return err
 	}
 	end := runEnd{V: 1, Type: "run_end"}
+	// A trace takes rounds x interval plus the last timeout (measured: 22 s
+	// for 10 rounds). One that cannot end before the next slot is skipped,
+	// so a slow run never delays the next one.
+	per := time.Duration(o.rounds)*probe.Defaults.RoundInterval + probe.Defaults.Timeout
+	deadline := slot.Add(o.every)
 	for i := 0; i < len(o.st.Active); i++ {
 		a := o.st.Active[i].Addr(fam)
 		if !a.IsValid() {
+			continue
+		}
+		if o.every > 0 && time.Now().Add(per).After(deadline) {
+			end.Skipped++
 			continue
 		}
 		if err := o.shortTraces(ctx); err != nil {
@@ -330,9 +346,13 @@ func (o *observer) run(ctx context.Context, slot time.Time, fam string) error {
 	return o.st.Save(filepath.Join(o.dir, "state.json"))
 }
 
+// enrichWait bounds the network answers (names, IPmap) after each trace;
+// what is missing is asked again at the next trace.
+const enrichWait = 8 * time.Second
+
 // trace probes one target and writes its records: start, probes, hops, end.
 func (o *observer) trace(ctx context.Context, a netip.Addr, rounds int, write func(...any) error) (bool, error) {
-	s := &session{cfg: o.cfg, opts: o.opts, known: o.known, target: a}
+	s := &session{cfg: o.cfg, opts: o.opts, known: o.known, target: a, enrichWait: enrichWait}
 	s.startCity()
 	pc := probe.Defaults
 	pc.Rounds, pc.Target, pc.ICMPID, pc.FlowID = rounds, a, random16(), random16()
@@ -453,11 +473,12 @@ func batchReport(dir string, every time.Duration, stdout, stderr io.Writer) int 
 		fmt.Fprintln(stderr, "tracertip:", err)
 		return exitFail
 	}
-	fmt.Fprintf(stdout, "%-10s %5s %8s %10s %8s %5s %4s %7s %3s %6s %8s %8s\n",
-		"day", "slots", "complete", "incomplete", "no-clock", "short", "gaps", "late-s", "hot", "max°C", "min-disk", "replaced")
+	fmt.Fprintf(stdout, "%-10s %5s %8s %10s %8s %5s %4s %7s %7s %7s %3s %6s %8s %8s\n",
+		"day", "slots", "complete", "incomplete", "no-clock", "short", "gaps", "late-s", "run-min", "skipped", "hot", "max°C", "min-disk", "replaced")
 	for _, d := range sum.Days {
-		fmt.Fprintf(stdout, "%-10s %5d %8d %10d %8d %5d %4d %7.0f %3d %6.1f %6dMB %8d\n",
-			d.Day, d.Slots, d.Complete, d.Incomplete, d.NoClock, d.Short, d.Gaps, d.MaxLateS, d.Hot, d.MaxTempC, d.MinDiskMB, d.Replaced)
+		fmt.Fprintf(stdout, "%-10s %5d %8d %10d %8d %5d %4d %7.0f %7.1f %7d %3d %6.1f %6dMB %8d\n",
+			d.Day, d.Slots, d.Complete, d.Incomplete, d.NoClock, d.Short, d.Gaps, d.MaxLateS, d.MaxRunMin, d.Skipped,
+			d.Hot, d.MaxTempC, d.MinDiskMB, d.Replaced)
 	}
 	fmt.Fprintf(stdout, "engine: %s\nbases lists seen: %d\n", strings.Join(sum.Engines, ", "), len(sum.Bases))
 	return exitOK

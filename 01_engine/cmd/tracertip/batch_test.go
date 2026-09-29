@@ -19,6 +19,23 @@ import (
 	"github.com/rbn8080/tracertip/01_engine/internal/targets"
 )
 
+func runFrame(t *testing.T, path string) (h runHeader, e runEnd) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.Lines(string(b)) {
+		switch {
+		case strings.Contains(line, `"type":"run_end"`):
+			json.Unmarshal([]byte(line), &e)
+		case strings.Contains(line, `"type":"run"`):
+			json.Unmarshal([]byte(line), &h)
+		}
+	}
+	return h, e
+}
+
 // A target that never answers is replaced by the reserve after FailLimit
 // runs; every run leaves a whole file and the replacement is logged.
 func TestBatchReplacesUnreachable(t *testing.T) {
@@ -75,6 +92,21 @@ func TestBatchReplacesUnreachable(t *testing.T) {
 	if err != nil || again.Active[0].ID != 2 {
 		t.Errorf("state not resumed: %+v, %v", again, err)
 	}
+
+	// A run that would overflow its slot skips the targets it cannot finish
+	// and never counts them as failures.
+	o.every = time.Hour
+	late := time.Now().UTC().Add(-time.Hour + 2*time.Second) // 2 s left; a 1-round trace takes 4 s
+	if err := o.run(context.Background(), late, batch.V4); err != nil {
+		t.Fatal(err)
+	}
+	if head, end := runFrame(t, filepath.Join(state, "runs", late.Format("2006-01-02"), late.Format("1504Z")+"-v4.jsonl")); end.Skipped != 1 || end.Traced != 0 || head.Targets != 1 {
+		t.Errorf("late run: %+v / %+v", head, end)
+	}
+	if len(st.Fails) != 0 {
+		t.Errorf("a skipped target counted as a failure: %v", st.Fails)
+	}
+	o.every = 0
 
 	// The daily check finds a second origin (MOAS): the target leaves, once a day.
 	asked := 0

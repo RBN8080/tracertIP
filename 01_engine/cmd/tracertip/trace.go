@@ -35,6 +35,8 @@ type session struct {
 	opts   enrich.Options
 	public bool
 	known  map[netip.Addr]enrich.Info // watch mode enriches each address once
+	// enrichWait, if set, bounds the time spent on network answers.
+	enrichWait time.Duration
 	// The target's city comes from the slowest base; it is read while probing.
 	city     chan cityResult
 	cityDone bool
@@ -238,7 +240,13 @@ func (s *session) judge(ctx context.Context, probes []model.Probe, wait bool) ([
 		}
 	}
 	if len(fresh) > 0 {
-		info, err := enrich.Enrich(ctx, fresh, s.opts)
+		ectx := ctx
+		if s.enrichWait > 0 {
+			var cancel context.CancelFunc
+			ectx, cancel = context.WithTimeout(ctx, s.enrichWait)
+			defer cancel()
+		}
+		info, err := enrich.Enrich(ectx, fresh, s.opts)
 		if err != nil {
 			return nil, err
 		}

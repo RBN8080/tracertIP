@@ -25,7 +25,9 @@ type Day struct {
 	Short      int // whole, but fewer targets traced than expected
 	Gaps       int // slots without any run
 	MaxLateS   float64
-	Hot        int // runs started at 80 °C or more
+	MaxRunMin  float64 // longest whole run
+	Skipped    int     // targets left for lack of time
+	Hot        int     // runs started at 80 °C or more
 	MaxTempC   float64
 	MinDiskMB  int64
 	Replaced   int
@@ -49,6 +51,8 @@ type runLine struct {
 	BasesSHA256 string    `json:"bases_sha256"`
 	Targets     int       `json:"targets"`
 	Traced      int       `json:"traced"`
+	Skipped     int       `json:"skipped"`
+	Start       time.Time `json:"start"`
 	Time        time.Time `json:"time"`
 }
 
@@ -89,6 +93,12 @@ func Report(dir string, every time.Duration, now time.Time) (Summary, error) {
 			sum.Bases = append(sum.Bases, head.BasesSHA256)
 		}
 		d.MaxLateS = max(d.MaxLateS, head.LateS)
+		if end != nil {
+			d.Skipped += end.Skipped
+			if !head.Start.IsZero() && !end.Time.IsZero() {
+				d.MaxRunMin = max(d.MaxRunMin, end.Time.Sub(head.Start).Minutes())
+			}
+		}
 		switch {
 		case !strings.HasSuffix(f, ".jsonl") || end == nil:
 			d.Incomplete++
