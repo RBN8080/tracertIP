@@ -1,8 +1,8 @@
 # tracertIP
 
-**Live telemetry of the path to an IP.** It shows which networks the traffic crosses, where along the path the time goes, and what physics (the speed of light in fiber) says about each hop.
+**Live telemetry of the path to an IP.** It shows which networks the traffic crosses, where each hop is, how far it can be, and what physics (the speed of light in fiber) says about it.
 
-> **Status: Phase 1, building the engine.** Phase 0 closed on 2026-09-28. This repository holds only structural material: code, scripts and templates that work on any network.
+> **Status: Phase 1 closed on 2026-09-29; the observation study is in its 24 h rehearsal.** This repository holds only structural material: code, scripts and templates that work on any network.
 
 ## Layout
 
@@ -11,52 +11,54 @@ One folder per piece, in order. Only `01_engine/` is production code; `00_` and 
 | Folder | What it is | Status |
 |---|---|---|
 | `00_verification/` | Study: 48 h of real data and the verdict on whether to build | Closed 2026-09-28 |
-| `01_engine/` | Product: traces and judges every hop; grows into live telemetry | In progress |
-| `02_observation/` | Study: the engine running untouched for at least 14 days | In preparation |
+| `01_engine/` | Product: traces and judges every hop; grows into live telemetry | Phase 1 closed 2026-09-29; Phase 2 next |
+| `02_observation/` | Study: the engine running untouched for at least 14 days | 24 h rehearsal running |
 
-## What is here today
+## The engine (`01_engine/`)
 
-`00_verification/node/` holds what runs on the measurement host during Phase 0 (48 h of data before building):
+One binary, `tracertip`, for Linux.
 
-| File | What it does |
+| Command | What it does |
 |---|---|
-| `recolectar.sh` + `.service` + `.timer` | Every 15 min, traces the declared targets in sequence with `mtr --json`, and samples host health every 5 min |
-| `vigilar.sh` + `.service` + `.timer` | Checks each run and alerts if access (router and CGNAT) stops answering, if several targets lose packets at once, if a run is incomplete or if the host overheats |
-| `nftables.conf` | Host firewall: inbound closed except what is needed |
-| `*.example` | Templates for per-network settings (targets, local network) |
+| `trace <ip>` | Paris traceroute (ICMP and ICMPv6). For each hop: network (AS), IXP, name, city, distance and the physics check. Add `-json` for records, `-public` to hide the home side, and `-watch` to keep probing and update every round. |
+| `lookup <ip>...` | Everything the bases and services say about addresses, without probing |
+| `update-db` | Downloads and verifies the local IP bases, each at its source's pace |
+| `targets` | Chooses and checks measurement targets: RIPE Atlas anchors, dual-stack, one BGP origin, outside the anycast census, and no faster than light from their declared place |
+| `batch` | Traces a target list on fixed UTC slots that alternate IPv4 and IPv6, one target at a time. It replaces failing targets from a reserve and writes data that survives a power cut |
 
-`00_verification/analysis/` (Go, standard library only) analyzes that data when the window closes: route changes by network (ASN), latency variation, host health, and a cross-check with the BGP announcements seen by RIPE RIS. It writes a report with the phase verdict. Its tests use made-up data only.
+`01_engine/deploy/` installs the binary with `CAP_NET_RAW` only, plus a daily, hardened update of the bases.
 
-`00_verification/monitor/` opens read-only views of the measurement host over SSH, each in its own window:
-- processes;
-- a dashboard with temperature, fan, current run and watchdog verdicts;
-- throughput;
-- traffic that is not the probe;
-- sockets per process;
-- system warnings;
-- the collection log;
-- interface errors.
+## Studies
 
-`monitor.ps1` (Windows Terminal) deploys `monitor.sh` to the host if its SHA-256 does not match.
+- **`00_verification/`:** closed and kept as it ran. It has the collector (`mtr`), the watchdog, the host firewall, the analysis that produced the verdict, and read-only monitors over SSH.
+- **`02_observation/`:** the service that runs `tracertip batch` for the study, its start and stop scripts, and `status.sh`, a one-screen, read-only view of the running study.
 
 ## What it does, and what it does not
 
-- It continuously traces **declared targets only**, one at a time and at a bounded rate. **It does not scan**: no range sweeps, no port lists.
-- It gathers in one view the hops and their networks (ASN), the geography, ocean crossings, the route history with its changes, and how many milliseconds each segment adds.
-- It uses physics as the judge: a location that violates the speed of light is flagged as impossible.
+- It traces **declared targets only**, one at a time and at a bounded rate. **It does not scan**: no range sweeps, no port lists.
+- It uses physics as the judge. A location that violates the speed of light is flagged as impossible, and a guess is shown as a guess, never as a fact.
+- It never invents an answer. An unknown AS is `AS?`, an unrouted address says so, and a gap is `*`, never 0 ms.
 
-## Expected requirements
+## Requirements
 
-- A Linux host that is always on, with `systemd` and `nftables`.
-- Go 1.27 or later, to build: `go build -trimpath -o bin/tracertip ./01_engine/cmd/tracertip` (for the node, add `GOOS=linux GOARCH=arm64 CGO_ENABLED=0`).
-- For `00_verification/node/`: `mtr` 0.96 or later, and `jq`.
-- For `00_verification/monitor/`: `htop`, `nload`, `tcpdump`, `sysstat` and `watch` on the host; Windows Terminal on the PC.
+- A Linux host that is always on, with `systemd`.
+- Go 1.27 or later, to build:
 
-Whatever depends on each installation (local network, addresses, targets) goes in settings files, with an `.example` template.
+  ```sh
+  go build -trimpath -o bin/tracertip ./01_engine/cmd/tracertip
+  ```
+
+  For the node, add `GOOS=linux GOARCH=arm64 CGO_ENABLED=0`.
+- For `00_verification/`: `mtr` 0.96 or later, `jq` and `nftables`; its monitors need `htop`, `nload`, `tcpdump`, `sysstat` and `watch`.
+
+Whatever depends on each installation (origin, access network, resolver, targets) goes in settings files, with an `.example` template.
 
 ## Privacy
 
 There is no data from any specific network here. Examples use ranges reserved for documentation (RFC 5737, RFC 3849, RFC 7042 and RFC 2606).
+
+- **Public output:** `-public` hides the home side and every distance from the origin, since three located hops would give the origin away.
+- **External services:** the engine never sends the access network's addresses to them.
 
 Every commit goes through a checker, `.githooks/pre-commit`, which:
 
@@ -72,12 +74,15 @@ git config core.hooksPath .githooks
 
 ## Third-party data
 
-Not redistributed: each installation downloads it and accepts its terms.
+Not redistributed: each installation downloads or asks for it and accepts its terms.
 
-- IPinfo Lite — CC BY-SA 4.0
-- [IP Geolocation by DB-IP](https://db-ip.com) — CC BY 4.0
-- TeleGeography Submarine Cable Map — CC BY-NC-SA 3.0 (**non-commercial use**)
-- Natural Earth — public domain
+- [IPtoASN](https://iptoasn.com) — PDDL (public domain)
+- [IP Geolocation by DB-IP](https://db-ip.com), ASN and City Lite — CC BY 4.0
+- [OurAirports](https://ourairports.com) — public domain
+- [PeeringDB](https://www.peeringdb.com) — its acceptable use policy
+- [LACeS anycast census](https://github.com/ut-dacs/Anycast-Census) — Hendriks et al., IMC 2025
+- RIPE NCC services: [RIPE IPmap](https://ipmap.ripe.net), [RIPEstat](https://stat.ripe.net) and [RIPE Atlas](https://atlas.ripe.net) anchors — RIPE NCC terms
+- IPinfo Lite (optional, with its token) — CC BY-SA 4.0
 
 ## License
 
@@ -85,4 +90,4 @@ MIT. See `LICENSE`.
 
 ---
 
-*Updated: 2026-09-28 23:40 UTC.*
+*Updated: 2026-09-29 10:16 UTC.*

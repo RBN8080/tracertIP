@@ -31,6 +31,15 @@ sudo sh start.sh targets.json config.json   # undo: sudo sh stop.sh
 
 **Feeds `01_engine`:** weeks of real data to calibrate Phase 2.
 
-**Status:** in preparation (targets, runs and service built; validity rules and the rehearsal next).
+**Watching it** (read-only, from any SSH session to the host):
 
-*Updated: 2026-09-29 09:48 UTC.*
+```sh
+watch -n 30 sh status.sh     # service, run in progress, last runs, health
+tracertip batch -state /var/lib/tracertip/study -report   # facts per day
+```
+
+Do not trace from the host by hand while the study runs: one target at a time is part of the method.
+
+**Status:** 24 h rehearsal running since 2026-09-29 10:30 UTC; the 14 days start only if it passes.
+
+*Updated: 2026-09-29 10:16 UTC.*

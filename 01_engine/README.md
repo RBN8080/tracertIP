@@ -1,13 +1,22 @@
 # 01 · Engine — product
 
-The only production code. Given an IP, it traces the path and, hop by hop, reports the network, the location and whether physics agrees. When physics disagrees, the hop is a proxy or anycast.
+The only production code. Given an IP, it traces the path and, hop by hop, reports the network, the city, how far the hop can be and whether physics agrees. When physics disagrees, the hop is a proxy or anycast, or its location is wrong.
 
-Probe → enrich → judge → output (console table and JSON).
+Probe → enrich → judge → output (console table and JSON Lines, schema in `schema/`).
 
-- **Target validation lives in the judge:** the same rules pick the targets and keep them honest: no proxies, true location, and automatic replacement with a log.
-- **It grows in place:** a one-shot CLI first (Phase 1), then live telemetry (Phase 2): continuous mode, route changes as events, a LAN-only API and a web dashboard embedded in the binary. A Java desktop client comes later, on the same API.
-- Built and tuned with the real data from `00_verification`.
+- **Probe:** Paris traceroute over ICMP and ICMPv6, so every probe of a trace follows the same path.
+- **Enrich:** AS and city from local bases, IXPs, router names, the anycast census and RIPE IPmap.
+- **Judge:** each claimed location is checked against the speed of light in fiber, with its source. A guess stays a guess.
+- **Targets and batch:** the same rules choose targets and keep them honest, with automatic replacement and a log. Batch mode runs a list for days, and its data survives a power cut.
+- **It grows in place:** Phase 2 (live telemetry: a LAN-only API and a web dashboard embedded in the binary) builds on this code. A Java desktop client comes later, on the same API.
 
-**Status:** in progress (Phase 1). Only planned engine work goes here.
+**Setup:**
 
-*Updated: 2026-09-28 23:40 UTC.*
+- Copy `config.example.json` to the user's config folder as `tracertip/config.json`.
+- Copy `geohints.tsv.example` to the bases folder as `geohints.tsv`.
+- Run `tracertip update-db`.
+- On a node, use `deploy/install.sh`.
+
+**Status:** Phase 1 closed on 2026-09-29. The engine is frozen while the observation study runs.
+
+*Updated: 2026-09-29 10:16 UTC.*

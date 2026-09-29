@@ -2,5 +2,7 @@
 # token<TAB>IATA code of the metro<TAB>source. Every row is an inference: the
 # judge only keeps it when physics allows it. Coordinates come from OurAirports
 # through the IATA code. Copy to <bases dir>/geohints.tsv and fill it with the
-# operator codes seen on your own paths.
+# operator codes seen on your own paths. A token written as token.domain
+# applies to that operator only (a code that means another city elsewhere).
 exmpla	lax	Example: operator code for a Los Angeles site, from its public naming
+exmplb.example.net	jfk	Example: code valid only under example.net, from its looking glass
