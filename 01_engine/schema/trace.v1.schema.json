@@ -4,96 +4,296 @@
   "title": "tracertIP trace record, version 1",
   "description": "One JSON Lines record. Readers ignore unknown fields; renaming or removing a field bumps v.",
   "oneOf": [
-    { "$ref": "#/$defs/start" },
-    { "$ref": "#/$defs/probe" },
-    { "$ref": "#/$defs/end" }
+    {
+      "$ref": "#/$defs/start"
+    },
+    {
+      "$ref": "#/$defs/probe"
+    },
+    {
+      "$ref": "#/$defs/hop"
+    },
+    {
+      "$ref": "#/$defs/end"
+    }
   ],
   "$defs": {
     "start": {
       "type": "object",
-      "required": ["v", "type", "tool", "version", "time", "target", "method", "params"],
+      "required": [
+        "v",
+        "type",
+        "tool",
+        "version",
+        "time",
+        "target",
+        "method",
+        "params"
+      ],
       "properties": {
-        "v": { "const": 1 },
-        "type": { "const": "start" },
-        "tool": { "type": "string" },
-        "version": { "type": "string" },
-        "time": { "type": "string", "format": "date-time" },
-        "target": { "type": "string" },
-        "method": { "type": "string" },
-        "params": { "$ref": "#/$defs/params" },
-        "bases": { "type": "array", "items": { "$ref": "#/$defs/base" } }
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "start"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "target": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/params"
+        },
+        "bases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/base"
+          }
+        }
       }
     },
     "params": {
       "type": "object",
       "properties": {
-        "ttl_max": { "type": "integer" },
-        "timeout_ms": { "type": "integer" },
-        "round_interval_ms": { "type": "integer" },
-        "probe_spacing_ms": { "type": "integer" },
-        "rounds": { "type": "integer" },
-        "icmp_id": { "type": "integer" },
-        "flow_id": { "type": "integer" }
+        "ttl_max": {
+          "type": "integer"
+        },
+        "timeout_ms": {
+          "type": "integer"
+        },
+        "round_interval_ms": {
+          "type": "integer"
+        },
+        "probe_spacing_ms": {
+          "type": "integer"
+        },
+        "rounds": {
+          "type": "integer"
+        },
+        "icmp_id": {
+          "type": "integer"
+        },
+        "flow_id": {
+          "type": "integer"
+        }
       }
     },
     "base": {
       "type": "object",
       "properties": {
-        "name": { "type": "string" },
-        "date": { "type": "string", "format": "date-time" },
-        "sha256": { "type": "string" },
-        "rows": { "type": "integer" }
+        "name": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "rows": {
+          "type": "integer"
+        }
       }
     },
     "probe": {
       "type": "object",
-      "required": ["v", "type", "round", "ttl", "icmp_id", "seq", "flow_id", "t_send_wall", "t_send_mono_ns", "status"],
+      "required": [
+        "v",
+        "type",
+        "round",
+        "ttl",
+        "icmp_id",
+        "seq",
+        "flow_id",
+        "t_send_wall",
+        "t_send_mono_ns",
+        "status"
+      ],
       "properties": {
-        "v": { "const": 1 },
-        "type": { "const": "probe" },
-        "round": { "type": "integer" },
-        "ttl": { "type": "integer", "minimum": 1, "maximum": 255 },
-        "icmp_id": { "type": "integer" },
-        "seq": { "type": "integer" },
-        "flow_id": { "type": "integer" },
-        "t_send_wall": { "type": "string", "format": "date-time" },
-        "t_send_mono_ns": { "type": "integer" },
-        "status": { "enum": ["reply", "no_reply", "send_error"] },
-        "error": { "type": "string" },
-        "replies": { "type": "array", "items": { "$ref": "#/$defs/reply" } }
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "probe"
+        },
+        "round": {
+          "type": "integer"
+        },
+        "ttl": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 255
+        },
+        "icmp_id": {
+          "type": "integer"
+        },
+        "seq": {
+          "type": "integer"
+        },
+        "flow_id": {
+          "type": "integer"
+        },
+        "t_send_wall": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "t_send_mono_ns": {
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "reply",
+            "no_reply",
+            "send_error"
+          ]
+        },
+        "error": {
+          "type": "string"
+        },
+        "replies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reply"
+          }
+        }
       }
     },
     "reply": {
       "type": "object",
       "properties": {
-        "t_recv_wall": { "type": "string", "format": "date-time" },
-        "rtt_ns": { "type": "integer" },
-        "late": { "type": "boolean" },
-        "from": { "type": "string" },
-        "icmp_type": { "type": "integer" },
-        "icmp_code": { "type": "integer" },
-        "ip_ttl": { "type": "integer" },
-        "ip_id": { "type": "integer" },
-        "ip_len": { "type": "integer" },
-        "q_ttl": { "type": "integer" },
-        "q_ip_id": { "type": "integer" },
-        "q_len": { "type": "integer" },
-        "raw": { "type": "string", "contentEncoding": "base64", "description": "The whole ICMP message, so it can be parsed again later." }
+        "t_recv_wall": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "rtt_ns": {
+          "type": "integer"
+        },
+        "late": {
+          "type": "boolean"
+        },
+        "from": {
+          "type": "string"
+        },
+        "icmp_type": {
+          "type": "integer"
+        },
+        "icmp_code": {
+          "type": "integer"
+        },
+        "ip_ttl": {
+          "type": "integer"
+        },
+        "ip_id": {
+          "type": "integer"
+        },
+        "ip_len": {
+          "type": "integer"
+        },
+        "q_ttl": {
+          "type": "integer"
+        },
+        "q_ip_id": {
+          "type": "integer"
+        },
+        "q_len": {
+          "type": "integer"
+        },
+        "raw": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "description": "The whole ICMP message, so it can be parsed again later."
+        }
       }
     },
     "end": {
       "type": "object",
-      "required": ["v", "type", "time", "reached", "hops", "probes", "no_reply", "duration_ms"],
+      "required": [
+        "v",
+        "type",
+        "time",
+        "reached",
+        "hops",
+        "probes",
+        "no_reply",
+        "duration_ms"
+      ],
       "properties": {
-        "v": { "const": 1 },
-        "type": { "const": "end" },
-        "time": { "type": "string", "format": "date-time" },
-        "reached": { "type": "boolean" },
-        "hops": { "type": "integer" },
-        "probes": { "type": "integer" },
-        "no_reply": { "type": "integer" },
-        "duration_ms": { "type": "integer" }
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "end"
+        },
+        "time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reached": {
+          "type": "boolean"
+        },
+        "hops": {
+          "type": "integer"
+        },
+        "probes": {
+          "type": "integer"
+        },
+        "no_reply": {
+          "type": "integer"
+        },
+        "duration_ms": {
+          "type": "integer"
+        }
       }
+    },
+    "hop": {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "ttl",
+        "min_rtt_ms",
+        "sent",
+        "replied"
+      ],
+      "description": "Derived per-hop judgement (enrichment, location, segment, flags); recomputable from probe records.",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "hop"
+        },
+        "ttl": {
+          "type": "integer"
+        },
+        "min_rtt_ms": {
+          "type": "number",
+          "description": "Negative: no reply (a gap)."
+        },
+        "sent": {
+          "type": "integer"
+        },
+        "replied": {
+          "type": "integer"
+        },
+        "home": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
     }
   }
 }
