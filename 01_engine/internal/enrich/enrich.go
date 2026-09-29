@@ -17,6 +17,7 @@ type Info struct {
 	Name   string  `json:"name,omitempty"`   // PTR
 	Places []Place `json:"places,omitempty"` // from the name: inference
 	DBCity *City   `json:"db_city,omitempty"`
+	IXP    *IXP    `json:"ixp,omitempty"`
 }
 
 // Options says where the bases are and how to resolve names.
@@ -43,6 +44,10 @@ func Enrich(ctx context.Context, addrs []netip.Addr, o Options) (map[netip.Addr]
 	if err != nil {
 		return nil, err
 	}
+	ixps, err := lookupIXPs(o.Dir, public)
+	if err != nil {
+		return nil, err
+	}
 	var names map[netip.Addr]string
 	if !o.NoDNS {
 		names = lookupNames(ctx, newResolver(o.Resolver), public)
@@ -62,6 +67,7 @@ func Enrich(ctx context.Context, addrs []netip.Addr, o Options) (map[netip.Addr]
 		if d := db[a]; d != nil {
 			inf.AS, inf.DBCity = d.asn, d.city
 		}
+		inf.IXP = ixps[a]
 		inf.Name = names[a]
 		if hints != nil && inf.Name != "" {
 			inf.Places = hints.For(inf.Name)

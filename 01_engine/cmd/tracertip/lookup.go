@@ -81,6 +81,13 @@ func describe(inf enrich.Info) string {
 		}
 		parts = append(parts, fmt.Sprintf("%s %s [%s]", label, as.Name, as.Source))
 	}
+	if x := inf.IXP; x != nil {
+		member := "member unknown"
+		if x.MemberASN != 0 {
+			member = fmt.Sprintf("member AS%d", x.MemberASN)
+		}
+		parts = append(parts, fmt.Sprintf("IXP %s, %s [%s]", x.Name, member, x.Source))
+	}
 	if len(inf.AS) == 0 && inf.Class == enrich.ClassPublic {
 		parts = append(parts, "AS?")
 	}

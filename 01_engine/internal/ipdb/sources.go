@@ -43,6 +43,20 @@ func Sources() []Source {
 			MaxBytes: 200 * mb, MaxRaw: 200 * mb, MinRows: 5_000,
 			Validate: func(r io.Reader) (int, error) { return ReadAirports(r, func(Airport) error { return nil }) },
 		},
+		// PeeringDB: anonymous API, 20 requests/min; its AUP allows research
+		// use and forbids passing the data on in bulk, so each user fetches it.
+		{
+			Name: "peeringdb-ixpfx", File: "peeringdb-ixpfx.json",
+			URL:      fixed("https://www.peeringdb.com/api/ixpfx"),
+			MaxBytes: 100 * mb, MaxRaw: 100 * mb, MinRows: 500,
+			Validate: func(r io.Reader) (int, error) { return ReadIXPrefixes(r, func(IXPrefix) error { return nil }) },
+		},
+		{
+			Name: "peeringdb-netixlan", File: "peeringdb-netixlan.json",
+			URL:      fixed("https://www.peeringdb.com/api/netixlan"),
+			MaxBytes: 500 * mb, MaxRaw: 500 * mb, MinRows: 10_000,
+			Validate: func(r io.Reader) (int, error) { return ReadIXMembers(r, func(IXMember) error { return nil }) },
+		},
 		{
 			Name: "ipinfo", File: "ipinfo_lite.csv.gz", Gzip: true, NeedsToken: true,
 			URL: func(_ time.Time, t Token) string {
