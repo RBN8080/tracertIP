@@ -1,0 +1,37 @@
+# The observation study: tracertip study, untouched for at least 14 days.
+# Raw sockets through an ambient capability only; state and data in
+# /var/lib/tracertip/study, written so that a power cut loses at most the
+# trace in progress.
+[Unit]
+Description=tracertip: observation study
+Documentation=https://github.com/RBN8080/tracertIP
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=tracertip
+Group=tracertip
+StateDirectory=tracertip
+StateDirectoryMode=0755
+ExecStart=/usr/local/bin/tracertip study -state /var/lib/tracertip/study -targets /var/lib/tracertip/study/targets-input.json -config /etc/tracertip/study.json -dir /var/lib/tracertip/study/bases
+Restart=always
+RestartSec=30
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

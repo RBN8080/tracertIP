@@ -290,6 +290,17 @@ func WriteAtomic(path string, b []byte, perm os.FileMode) error {
 	return syncDir(dir)
 }
 
+// Rename renames and syncs the folder, so the new name survives a power cut.
+func Rename(from, to string) error {
+	if err := os.Rename(from, to); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(to))
+}
+
+// SyncDir makes the files just created in dir survive a power cut.
+func SyncDir(dir string) error { return syncDir(dir) }
+
 // cleanTemps removes temporary files a power cut left behind; younger ones
 // may belong to a download still running.
 func cleanTemps(dir string, now time.Time) {

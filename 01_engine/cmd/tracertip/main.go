@@ -33,6 +33,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runUpdateDB(args[1:], stdout, stderr)
 	case "targets":
 		return runTargets(args[1:], stdout, stderr)
+	case "study":
+		return runStudy(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, "tracertip", version())
 		return exitOK
@@ -53,6 +55,7 @@ commands:
   lookup    class, AS, name and location hints of IP addresses
   update-db download and verify the local IP bases
   targets   choose and check the study's destinations (RIPE Atlas anchors)
+  study     run the observation study: slots, alternating families, reserve
   version   print the version
   help      print this help
 `)

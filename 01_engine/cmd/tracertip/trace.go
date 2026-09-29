@@ -187,14 +187,7 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 			err = nil // stopping is how a watch ends
 		}
 	} else {
-		var probes []model.Probe
-		sum, err = probe.Trace(ctx, conn, pc, func(p model.Probe) error {
-			probes = append(probes, p)
-			return raw(p)
-		})
-		if err == nil {
-			recs, err = s.judge(ctx, probes, true)
-		}
+		sum, recs, err = s.once(ctx, conn, pc, raw)
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, "tracertip:", err)
@@ -216,6 +209,20 @@ func runTrace(args []string, stdout, stderr io.Writer) int {
 	output.WriteTable(stdout, recs)
 	fmt.Fprintf(stdout, "reached=%t probes=%d no_reply=%d %.1f s\n", end.Reached, end.Probes, end.NoReply, float64(end.DurationMS)/1000)
 	return exitOK
+}
+
+// once probes pc.Rounds rounds and judges the hops; raw sees every probe.
+func (s *session) once(ctx context.Context, conn probe.Conn, pc probe.Config, raw func(model.Probe) error) (probe.Summary, []output.HopRecord, error) {
+	var probes []model.Probe
+	sum, err := probe.Trace(ctx, conn, pc, func(p model.Probe) error {
+		probes = append(probes, p)
+		return raw(p)
+	})
+	if err != nil {
+		return sum, nil, err
+	}
+	recs, err := s.judge(ctx, probes, true)
+	return sum, recs, err
 }
 
 // judge turns probes into hop records, enriching addresses not seen before;

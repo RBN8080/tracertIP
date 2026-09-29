@@ -12,7 +12,7 @@ One folder per piece, in order. Only `01_engine/` is production code; `00_` and 
 |---|---|---|
 | `00_verification/` | Study: 48 h of real data and the verdict on whether to build | Closed 2026-09-28 |
 | `01_engine/` | Product: traces and judges every hop; grows into live telemetry | In progress |
-| `02_observation/` | Study: the engine running untouched for at least 14 days | Pending |
+| `02_observation/` | Study: the engine running untouched for at least 14 days | In preparation |
 
 ## What is here today
 
