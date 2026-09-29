@@ -34,6 +34,7 @@ func runUpdateDB(args []string, stdout, stderr io.Writer) int {
 	only := fs.String("only", "", "comma-separated bases to update (default: all)")
 	tokenFile := fs.String("token-file", "", "file with the IPinfo token (mode 0600); optional")
 	noInput := fs.Bool("no-input", false, "never ask for a token")
+	force := fs.Bool("force", false, "fetch even if the base in use is younger than its source's pace")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: tracertip update-db [flags]")
 		fs.PrintDefaults()
@@ -53,9 +54,20 @@ func runUpdateDB(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	client := ipdb.NewClient(downloadTimeout)
+	ipdb.UserAgent = "tracertip/" + version() + " (+https://github.com/RBN8080/tracertIP)"
 	failed := false
 	for _, src := range ipdb.Sources() {
 		if want != nil && !slices.Contains(want, src.Name) {
+			continue
+		}
+		due, cur, err := ipdb.Due(*dir, src, time.Now())
+		if err != nil {
+			fmt.Fprintf(stderr, "tracertip: %s: %v\n", src.Name, err)
+			failed = true
+			continue
+		}
+		if !due && !*force {
+			fmt.Fprintf(stdout, "%-12s fresh: fetched %s (pace %s)\n", src.Name, cur.Date.Format(time.RFC3339), src.MinAge)
 			continue
 		}
 		var tok ipdb.Token

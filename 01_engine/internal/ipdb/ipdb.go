@@ -25,7 +25,8 @@ type Source struct {
 	File       string // file name in the bases folder
 	URL        func(now time.Time, tok Token) string
 	NeedsToken bool
-	PrevMonth  bool // on HTTP 404, try the previous month (monthly files)
+	PrevMonth  bool          // on HTTP 404, try the previous month (monthly files)
+	MinAge     time.Duration // do not fetch again sooner: the source's own update pace and API limits
 	Gzip       bool
 	MaxBytes   int64                        // download cap (CWE-409)
 	MaxRaw     int64                        // decompressed cap (CWE-409)
@@ -66,6 +67,22 @@ func NewClient(timeout time.Duration) *http.Client {
 			return nil
 		},
 	}
+}
+
+// UserAgent identifies the tool to the servers it downloads from.
+var UserAgent = "tracertip (+https://github.com/RBN8080/tracertIP)"
+
+// ErrFresh means the file in use is younger than the source's MinAge.
+var ErrFresh = errors.New("fresh")
+
+// Due reports whether src should be fetched now, and the entry in use.
+func Due(dir string, src Source, now time.Time) (bool, Entry, error) {
+	m, err := ReadManifest(dir)
+	if err != nil {
+		return false, Entry{}, err
+	}
+	e, ok := m[src.Name]
+	return !ok || now.Sub(e.Date) >= src.MinAge, e, nil
 }
 
 // ReadManifest reads dir/manifest.json; a missing file is an empty manifest.
@@ -129,6 +146,7 @@ func download(ctx context.Context, c *http.Client, dir, u string, max int64) (st
 	if err != nil {
 		return "", "", err
 	}
+	req.Header.Set("User-Agent", UserAgent)
 	resp, err := c.Do(req)
 	if err != nil {
 		return "", "", err
@@ -136,6 +154,13 @@ func download(ctx context.Context, c *http.Client, dir, u string, max int64) (st
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		return "", "", errNotFound
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		after := resp.Header.Get("Retry-After") // RFC 9110 10.2.3: seconds or a date
+		if after == "" {
+			after = "unknown"
+		}
+		return "", "", fmt.Errorf("rate limited by the server (HTTP 429); retry after %s", after)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("HTTP %d", resp.StatusCode)

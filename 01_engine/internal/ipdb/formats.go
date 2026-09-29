@@ -207,3 +207,31 @@ func lastAddr(p netip.Prefix) netip.Addr {
 	v := uint32(a[0])<<24 | uint32(a[1])<<16 | uint32(a[2])<<8 | uint32(a[3]) | host
 	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
 }
+
+// AnycastPrefix is a prefix the LACeS census found anycast, and from how many sites.
+type AnycastPrefix struct {
+	Prefix netip.Prefix
+	Sites  int
+}
+
+// ReadAnycastCensus reads the LACeS daily census CSV: prefix,
+// number_of_sites, backing_prefix (Hendriks et al., IMC 2025).
+func ReadAnycastCensus(r io.Reader, fn func(AnycastPrefix) error) (int, error) {
+	cr := csv.NewReader(r)
+	cr.ReuseRecord = true
+	col, err := header(cr, "prefix", "number_of_sites")
+	if err != nil {
+		return 0, err
+	}
+	return readRows(cr, func(f []string) (bool, error) {
+		p, err := netip.ParsePrefix(f[col["prefix"]])
+		if err != nil || !p.Addr().Is4() {
+			return false, err
+		}
+		n, err := strconv.Atoi(f[col["number_of_sites"]])
+		if err != nil || n < 0 {
+			return false, fmt.Errorf("bad number_of_sites %q", f[col["number_of_sites"]])
+		}
+		return true, fn(AnycastPrefix{Prefix: p.Masked(), Sites: n})
+	})
+}

@@ -244,3 +244,46 @@ func TestLoadToken(t *testing.T) {
 		}
 	}
 }
+
+func TestAPIEtiquette(t *testing.T) {
+	var ua string
+	limited := true
+	srv, c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		if limited {
+			w.Header().Set("Retry-After", "3600")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Write(gz(tsv))
+	})
+	dir := t.TempDir()
+	src := testSource(srv.URL)
+	src.MinAge = time.Hour
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	if _, err := Update(context.Background(), c, dir, src, Token{}, now); err == nil || !strings.Contains(err.Error(), "retry after 3600") {
+		t.Errorf("429: err = %v, want the Retry-After value", err)
+	}
+	if !strings.HasPrefix(ua, "tracertip") {
+		t.Errorf("User-Agent %q", ua)
+	}
+	limited = false
+	if _, err := Update(context.Background(), c, dir, src, Token{}, now); err != nil {
+		t.Fatal(err)
+	}
+	if due, _, _ := Due(dir, src, now.Add(30*time.Minute)); due {
+		t.Error("due again before MinAge")
+	}
+	if due, _, _ := Due(dir, src, now.Add(2*time.Hour)); !due {
+		t.Error("not due after MinAge")
+	}
+}
+
+func TestReadAnycastCensus(t *testing.T) {
+	csv := "prefix,number_of_sites,backing_prefix\n192.0.2.0/24,62,192.0.2.0/24\n2001:db8::/48,5,2001:db8::/48\n"
+	var got []AnycastPrefix
+	n, err := ReadAnycastCensus(strings.NewReader(csv), func(p AnycastPrefix) error { got = append(got, p); return nil })
+	if err != nil || n != 1 || got[0].Sites != 62 || got[0].Prefix.String() != "192.0.2.0/24" {
+		t.Errorf("%d, %v, %+v", n, err, got)
+	}
+}

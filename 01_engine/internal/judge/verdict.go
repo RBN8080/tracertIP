@@ -53,6 +53,7 @@ const (
 	FlagDBImpossible = "db-location-impossible"
 	FlagAnycast      = "possible-anycast" // destination faster than its location allows (H3)
 	FlagUnrouted     = "unrouted"         // no AS announces it
+	FlagCensus       = "anycast-census"   // the LACeS census lists its prefix as anycast
 )
 
 // Judge checks every hop. Without an origin, physics cannot be evaluated and
@@ -75,6 +76,9 @@ func Judge(hops []Hop, info map[netip.Addr]enrich.Info, origin *Coord) []Verdict
 				v.Flags = append(v.Flags, FlagCGNAT)
 			case enrich.ClassPrivate:
 				v.Flags = append(v.Flags, FlagPrivate)
+			}
+			if inf.Anycast != nil {
+				v.Flags = append(v.Flags, FlagCensus)
 			}
 			if inf.IXP != nil {
 				v.Flags = append(v.Flags, FlagIXP)

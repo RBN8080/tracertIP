@@ -70,3 +70,29 @@ func readFile(path string, fn func(*os.File) error) error {
 	defer f.Close()
 	return fn(f)
 }
+
+// Anycast says a census lists the address's prefix as anycast.
+type Anycast struct {
+	Prefix string `json:"prefix"`
+	Sites  int    `json:"sites"`
+	Source string `json:"source"` // "laces" (Hendriks et al., IMC 2025)
+}
+
+func lookupAnycast(dir string, addrs []netip.Addr) (map[netip.Addr]*Anycast, error) {
+	out := map[netip.Addr]*Anycast{}
+	err := readFile(filepath.Join(dir, "anycast-ipv4.csv"), func(f *os.File) error {
+		_, err := ipdb.ReadAnycastCensus(f, func(p ipdb.AnycastPrefix) error {
+			for _, a := range addrs {
+				if out[a] == nil && p.Prefix.Contains(a) {
+					out[a] = &Anycast{Prefix: p.Prefix.String(), Sites: p.Sites, Source: "laces"}
+				}
+			}
+			return nil
+		})
+		return err
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return out, nil
+	}
+	return out, err
+}

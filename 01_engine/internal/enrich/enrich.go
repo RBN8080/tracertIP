@@ -10,14 +10,15 @@ import (
 
 // Info is everything known about one address, each answer with its source.
 type Info struct {
-	Addr   string  `json:"addr"`
-	Class  string  `json:"class"`
-	RFC    string  `json:"rfc,omitempty"`
-	AS     []AS    `json:"as,omitempty"`     // all bases that answered; never invented
-	Name   string  `json:"name,omitempty"`   // PTR
-	Places []Place `json:"places,omitempty"` // from the name: inference
-	DBCity *City   `json:"db_city,omitempty"`
-	IXP    *IXP    `json:"ixp,omitempty"`
+	Addr    string   `json:"addr"`
+	Class   string   `json:"class"`
+	RFC     string   `json:"rfc,omitempty"`
+	AS      []AS     `json:"as,omitempty"`     // all bases that answered; never invented
+	Name    string   `json:"name,omitempty"`   // PTR
+	Places  []Place  `json:"places,omitempty"` // from the name: inference
+	DBCity  *City    `json:"db_city,omitempty"`
+	IXP     *IXP     `json:"ixp,omitempty"`
+	Anycast *Anycast `json:"anycast,omitempty"` // listed by a census
 }
 
 // Options says where the bases are and how to resolve names.
@@ -48,6 +49,10 @@ func Enrich(ctx context.Context, addrs []netip.Addr, o Options) (map[netip.Addr]
 	if err != nil {
 		return nil, err
 	}
+	census, err := lookupAnycast(o.Dir, public)
+	if err != nil {
+		return nil, err
+	}
 	var names map[netip.Addr]string
 	if !o.NoDNS {
 		names = lookupNames(ctx, newResolver(o.Resolver), public)
@@ -68,6 +73,7 @@ func Enrich(ctx context.Context, addrs []netip.Addr, o Options) (map[netip.Addr]
 			inf.AS, inf.DBCity = d.asn, d.city
 		}
 		inf.IXP = ixps[a]
+		inf.Anycast = census[a]
 		inf.Name = names[a]
 		if hints != nil && inf.Name != "" {
 			inf.Places = hints.For(inf.Name)
