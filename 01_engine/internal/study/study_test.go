@@ -25,6 +25,44 @@ func TestSlot(t *testing.T) {
 	}
 }
 
+// Four slots: one valid, one run without NTP time, one cut short, one gap.
+func TestReport(t *testing.T) {
+	dir := t.TempDir()
+	every := 30 * time.Minute
+	s0 := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	write := func(slot time.Time, fam string, synced, finish bool) {
+		r, err := CreateRun(filepath.Join(dir, "runs"), slot, fam)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Write(map[string]any{"v": 1, "type": "run", "slot": slot, "engine": "e1", "clock_synced": synced,
+			"temp_c": 81.5, "disk_free_mb": 900, "targets": 2})
+		if !finish {
+			r.Abort()
+			return
+		}
+		r.Write(map[string]any{"v": 1, "type": "run_end", "traced": 2})
+		r.Close()
+	}
+	write(s0, V4, true, true)
+	write(s0.Add(every), V6, false, true)
+	write(s0.Add(2*every), V4, true, false)
+	sum, err := Report(dir, every, s0.Add(3*every))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Days) != 1 {
+		t.Fatalf("days %+v", sum.Days)
+	}
+	d := sum.Days[0]
+	if d.Slots != 4 || d.Valid != 1 || d.NoClock != 1 || d.Incomplete != 1 || d.Gaps != 1 || d.Hot != 3 || !d.Invalid() || !sum.LowDisk {
+		t.Errorf("day %+v", d)
+	}
+	if again, why := sum.Repeat(); !again {
+		t.Errorf("3 of 4 slots without a valid run, yet no repeat (%s)", why)
+	}
+}
+
 func entry(id int, cont, role string) targets.Target {
 	return targets.Target{Anchor: targets.Anchor{ID: id, IPv4: netip.MustParseAddr("192.0.2.1"), IPv6: netip.MustParseAddr("2001:db8::1")},
 		Continent: cont, Role: role, Checks: []targets.Check{{Name: "all", OK: true}}}

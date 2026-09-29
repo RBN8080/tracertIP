@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,7 +37,8 @@ type runHeader struct {
 	ClockSynced bool      `json:"clock_synced"` // false: the run is invalid (D7)
 	TempC       float64   `json:"temp_c,omitempty"`
 	DiskFreeMB  int64     `json:"disk_free_mb,omitempty"`
-	Targets     int       `json:"targets"`
+	BasesSHA256 string    `json:"bases_sha256,omitempty"` // of the frozen copy's SHA256SUMS
+	Targets     int       `json:"targets"`                // active, with an address in the family
 }
 
 type runEnd struct {
@@ -79,6 +83,7 @@ func runStudy(args []string, stdout, stderr io.Writer) int {
 	rounds := fs.Int("rounds", 10, "rounds per trace")
 	short := fs.Duration("short", 5*time.Minute, "fixed targets: a 2-round trace this often (0 = off)")
 	once := fs.Bool("once", false, "run the current slot and stop")
+	report := fs.Bool("report", false, "check the runs so far against the validity rules and stop")
 	cfgPath := fs.String("config", defaultConfigPath(), "configuration file (origin, access ISP, resolver, bases)")
 	bases := fs.String("dir", "", "folder with the bases, fixed for the study (default: config)")
 	fs.Usage = func() {
@@ -90,6 +95,9 @@ func runStudy(args []string, stdout, stderr io.Writer) int {
 			fs.Usage()
 		}
 		return exitUsage
+	}
+	if *report {
+		return studyReport(*dir, *every, stdout, stderr)
 	}
 	explicit := false
 	fs.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "config" })
@@ -249,8 +257,19 @@ func (o *observer) run(ctx context.Context, slot time.Time, fam string) error {
 	}
 	now := time.Now().UTC()
 	temp, free := study.Health(o.dir)
-	if err := rf.Write(runHeader{V: 1, Type: "run", Slot: slot, Family: fam, Start: now, LateS: now.Sub(slot).Seconds(),
-		Engine: version(), ClockSynced: study.ClockSynced(), TempC: temp, DiskFreeMB: free, Targets: len(o.st.Active)}); err != nil {
+	want := 0
+	for _, e := range o.st.Active {
+		if e.Addr(fam).IsValid() {
+			want++
+		}
+	}
+	h := runHeader{V: 1, Type: "run", Slot: slot, Family: fam, Start: now, LateS: now.Sub(slot).Seconds(),
+		Engine: version(), ClockSynced: study.ClockSynced(), TempC: temp, DiskFreeMB: free, Targets: want}
+	if b, err := os.ReadFile(filepath.Join(o.opts.Dir, "SHA256SUMS")); err == nil {
+		sum := sha256.Sum256(b)
+		h.BasesSHA256 = hex.EncodeToString(sum[:])
+	}
+	if err := rf.Write(h); err != nil {
 		rf.Abort()
 		return err
 	}
@@ -423,4 +442,34 @@ func (o *observer) keepIPmap(slot time.Time) {
 	if err := ipdb.WriteAtomic(filepath.Join(day, "ipmap-cache.json"), b, 0o644); err != nil {
 		fmt.Fprintln(o.log, "tracertip: keeping the IPmap answers:", err)
 	}
+}
+
+// studyReport prints each day against the validity rules and the verdict:
+// exit 0 to go on, 1 when the study must be repeated (V6).
+func studyReport(dir string, every time.Duration, stdout, stderr io.Writer) int {
+	sum, err := study.Report(dir, every, time.Now())
+	if err != nil {
+		fmt.Fprintln(stderr, "tracertip:", err)
+		return exitFail
+	}
+	fmt.Fprintf(stdout, "%-10s %5s %5s %10s %8s %4s %5s %4s %3s %6s %8s %8s  %s\n",
+		"day", "slots", "valid", "incomplete", "no-clock", "late", "short", "gaps", "hot", "max°C", "min-disk", "replaced", "status")
+	for _, d := range sum.Days {
+		status := "ok"
+		if d.Invalid() {
+			status = "INVALID"
+		}
+		fmt.Fprintf(stdout, "%-10s %5d %5d %10d %8d %4d %5d %4d %3d %6.1f %6dMB %8d  %s\n",
+			d.Day, d.Slots, d.Valid, d.Incomplete, d.NoClock, d.Late, d.Short, d.Gaps, d.Hot, d.MaxTempC, d.MinDiskMB, d.Replaced, status)
+	}
+	fmt.Fprintf(stdout, "engine: %s; frozen bases seen: %d\n", strings.Join(sum.Engines, ", "), len(sum.Bases))
+	if sum.LowDisk {
+		fmt.Fprintln(stdout, "alert: less than 1 GB free")
+	}
+	if again, why := sum.Repeat(); again {
+		fmt.Fprintln(stdout, "verdict: REPEAT the study:", why)
+		return exitFail
+	}
+	fmt.Fprintln(stdout, "verdict: go on")
+	return exitOK
 }
