@@ -131,7 +131,7 @@ func TestEnrichFromBases(t *testing.T) {
 		netip.MustParseAddr("203.0.114.1"), netip.MustParsePrefix("100.64.0.0/10").Addr().Next()
 	// The bases are searched directly: Enrich only looks up public addresses.
 	v6 := netip.MustParseAddr("2001:db8:1::42")
-	db, err := lookupBases(dir, []netip.Addr{a, b, c, v6})
+	db, err := lookupBases(dir, []netip.Addr{a, b, c, v6}, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestEnrichFromBases(t *testing.T) {
 	if len(db[c].asn) != 0 {
 		t.Errorf("%s: invented an AS %+v", c, db[c].asn)
 	}
-	got, err := Enrich(context.Background(), []netip.Addr{a, cg}, Options{Dir: dir, NoDNS: true})
+	got, err := Enrich(context.Background(), []netip.Addr{a, cg}, Options{Dir: dir, NoDNS: true, NoIPmap: true})
 	if err != nil {
 		t.Fatal(err)
 	}

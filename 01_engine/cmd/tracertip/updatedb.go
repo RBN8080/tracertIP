@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rbn8080/tracertip/01_engine/internal/ipdb"
@@ -46,12 +47,12 @@ func runUpdateDB(args []string, stdout, stderr io.Writer) int {
 	if *only != "" {
 		want = strings.Split(*only, ",")
 	}
-	if err := os.MkdirAll(*dir, 0o700); err != nil {
+	if err := os.MkdirAll(*dir, 0o755); err != nil { // public data, read by other users
 		fmt.Fprintln(stderr, "tracertip:", err)
 		return exitFail
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	client := ipdb.NewClient(downloadTimeout)
 	ipdb.UserAgent = "tracertip/" + version() + " (+https://github.com/RBN8080/tracertIP)"

@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -107,6 +108,7 @@ func Update(ctx context.Context, c *http.Client, dir string, src Source, tok Tok
 	if err != nil {
 		return Entry{}, err
 	}
+	cleanTemps(dir, now)
 	u := src.URL(now, tok)
 	tmp, sum, err := download(ctx, c, dir, u, src.MaxBytes)
 	if errors.Is(err, errNotFound) && src.PrevMonth {
@@ -127,13 +129,19 @@ func Update(ctx context.Context, c *http.Client, dir string, src Source, tok Tok
 	if prev, ok := man[src.Name]; ok && float64(rows) < shrinkFloor*float64(prev.Rows) {
 		return Entry{}, fmt.Errorf("%s: rejected: %d rows, the file in use has %d", src.Name, rows, prev.Rows)
 	}
+	// The file in use becomes .prev through a hard link and is then replaced
+	// by one rename, so a power cut never leaves the base missing.
 	cur := filepath.Join(dir, src.File)
 	if _, err := os.Stat(cur); err == nil {
-		if err := os.Rename(cur, cur+".prev"); err != nil {
+		os.Remove(cur + ".prev")
+		if err := os.Link(cur, cur+".prev"); err != nil {
 			return Entry{}, err
 		}
 	}
 	if err := os.Rename(tmp, cur); err != nil {
+		return Entry{}, err
+	}
+	if err := syncDir(dir); err != nil {
 		return Entry{}, err
 	}
 	e := Entry{File: src.File, URL: redactURL(u, tok), Date: now.UTC(), SHA256: sum, Rows: rows}
@@ -167,6 +175,11 @@ func download(ctx context.Context, c *http.Client, dir, u string, max int64) (st
 	}
 	f, err := os.CreateTemp(dir, ".download-*")
 	if err != nil {
+		return "", "", err
+	}
+	if err := f.Chmod(0o644); err != nil { // public data, read by other users
+		f.Close()
+		os.Remove(f.Name())
 		return "", "", err
 	}
 	h := sha256.New()
@@ -245,22 +258,51 @@ func writeManifest(dir string, m Manifest) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, ".manifest-*")
+	return WriteAtomic(filepath.Join(dir, manifestFile), append(b, '\n'), 0o644)
+}
+
+// WriteAtomic replaces path with b so that a power cut leaves the old or the
+// new file, never a partial one: temporary file, fsync, rename, then fsync of
+// the folder so that the rename itself is kept (Pillai et al., OSDI 2014).
+func WriteAtomic(path string, b []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(append(b, '\n'))
+	err = f.Chmod(perm)
+	if err == nil {
+		_, err = f.Write(b)
+	}
 	if err == nil {
 		err = f.Sync()
 	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
+	if err == nil {
+		err = os.Rename(f.Name(), path)
+	}
 	if err != nil {
 		os.Remove(f.Name())
 		return err
 	}
-	return os.Rename(f.Name(), filepath.Join(dir, manifestFile))
+	return syncDir(dir)
+}
+
+// cleanTemps removes temporary files a power cut left behind; younger ones
+// may belong to a download still running.
+func cleanTemps(dir string, now time.Time) {
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		n := e.Name()
+		if !strings.HasPrefix(n, ".download-") && !strings.HasPrefix(n, ".tmp-") {
+			continue
+		}
+		if fi, err := e.Info(); err == nil && now.Sub(fi.ModTime()) > time.Hour {
+			os.Remove(filepath.Join(dir, n))
+		}
+	}
 }
 
 func redactURL(u string, tok Token) string {

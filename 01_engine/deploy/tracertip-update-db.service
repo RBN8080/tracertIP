@@ -1,0 +1,40 @@
+# Updates the IP bases in /var/lib/tracertip/bases. update-db keeps the files
+# in use when a source fails and replaces each one atomically, so a power cut
+# never leaves a base broken or missing.
+[Unit]
+Description=tracertip: update the IP bases
+Documentation=https://github.com/RBN8080/tracertIP
+# TLS and each source's pace need the right time: wait for NTP after a cold boot.
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+StartLimitIntervalSec=1d
+StartLimitBurst=6
+
+[Service]
+Type=oneshot
+User=tracertip
+Group=tracertip
+StateDirectory=tracertip
+StateDirectoryMode=0755
+ExecStart=/usr/local/bin/tracertip update-db -dir /var/lib/tracertip/bases -no-input
+# A failed source is retried an hour later (PeeringDB serves one identical
+# anonymous response per hour); sources already fresh are not fetched again.
+Restart=on-failure
+RestartSec=1h
+TimeoutStartSec=30min
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

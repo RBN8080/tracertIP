@@ -21,6 +21,7 @@ func runLookup(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	hints := fs.String("hints", "", "hint table (default: <dir>/geohints.tsv)")
 	resolver := fs.String("resolver", "", "DNS server for names, host:port (default: config, then system)")
 	noDNS := fs.Bool("no-dns", false, "do not look up names")
+	noIPmap := fs.Bool("no-ipmap", false, "do not ask RIPE IPmap for router cities")
 	jsonOut := fs.Bool("json", false, "write one JSON object per address")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "usage: tracertip lookup [flags] <ip>... (or - to read them from stdin)")
@@ -56,8 +57,9 @@ func runLookup(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		addrs = append(addrs, a.Unmap())
 	}
-	info, err := enrich.Enrich(context.Background(), addrs,
-		enrich.Options{Dir: first(*dir, cfg.Bases, defaultBasesDir()), Hints: *hints, Resolver: first(*resolver, cfg.Resolver), NoDNS: *noDNS})
+	o := enrichOptions(cfg, *dir, *resolver, *noDNS, *noIPmap)
+	o.Hints = *hints
+	info, err := enrich.Enrich(context.Background(), addrs, o)
 	if err != nil {
 		fmt.Fprintln(stderr, "tracertip:", err)
 		return exitFail
@@ -108,6 +110,13 @@ func describe(inf enrich.Info) string {
 			src += ", guess"
 		}
 		parts = append(parts, fmt.Sprintf("hint %s=%s, %s [%s]", p.Token, p.City, p.Country, src))
+	}
+	if m := inf.IPmap; m != nil {
+		how := strings.Join(m.Engines, "+")
+		if m.Measured() {
+			how = fmt.Sprintf("%s, probe %.1f ms away", how, m.MinRTT)
+		}
+		parts = append(parts, fmt.Sprintf("ipmap %s, %s [%s]", m.City, m.Country, how))
 	}
 	if c := inf.DBCity; c != nil {
 		parts = append(parts, fmt.Sprintf("db %s, %s", c.City, c.Country))

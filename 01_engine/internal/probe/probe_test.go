@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"net/netip"
 	"os"
 	"sync"
@@ -152,6 +153,28 @@ func TestTrace(t *testing.T) {
 		if a.Round > b.Round || (a.Round == b.Round && a.TTL >= b.TTL) {
 			t.Fatalf("records out of order: (%d,%d) then (%d,%d)", a.Round, a.TTL, b.Round, b.TTL)
 		}
+	}
+}
+
+// Watch mode: rounds go on, past the sequence wrap, until ctx ends.
+func TestTraceContinuous(t *testing.T) {
+	target := netip.MustParseAddr("198.51.100.7")
+	net := newFakeNet(target, 2)
+	cfg := Config{Target: target, TTLMax: 10, Rounds: 0, Timeout: 5 * time.Millisecond,
+		RoundInterval: time.Millisecond, Spacing: 0, ICMPID: 1, FlowID: 2}
+	ctx, cancel := context.WithCancel(context.Background())
+	last := -1
+	_, err := Trace(ctx, net, cfg, func(p model.Probe) error {
+		if p.Status != model.StatusReply {
+			t.Errorf("round %d TTL %d: %s", p.Round, p.TTL, p.Status)
+		}
+		if last = p.Round; last >= maxRoundSeq+5 {
+			cancel()
+		}
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) || last < maxRoundSeq+5 {
+		t.Errorf("err %v after round %d", err, last)
 	}
 }
 

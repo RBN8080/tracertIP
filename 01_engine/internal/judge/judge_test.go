@@ -86,6 +86,31 @@ func TestJudge(t *testing.T) {
 	}
 }
 
+// A city measured by IPmap from a nearby probe outranks a name; an unmeasured
+// IPmap answer does not.
+func TestIPmapOrder(t *testing.T) {
+	a := netip.MustParseAddr("192.0.2.1")
+	judgeWith := func(m *enrich.IPmap) *Candidate {
+		info := map[netip.Addr]enrich.Info{a: {Class: enrich.ClassPublic, IPmap: m,
+			Places: []enrich.Place{place("lax", lax, "US")}}}
+		return Judge([]Hop{{TTL: 1, Addrs: []netip.Addr{a}, MinRTT: 60}}, info, &dfw)[0].Location
+	}
+	sj := func(rtt float64, engines ...string) *enrich.IPmap {
+		return &enrich.IPmap{City: "San Jose", Country: "US", Lat: sjc.Lat, Lon: sjc.Lon, Engines: engines, MinRTT: rtt}
+	}
+	if l := judgeWith(sj(0.8, "latency")); l == nil || l.City != "San Jose" || l.Source != "ipmap:rtt" {
+		t.Errorf("measured: kept %+v", l)
+	}
+	if l := judgeWith(sj(0, "reverse-dns")); l == nil || l.City != "lax" {
+		t.Errorf("named: kept %+v, want the name hint", l)
+	}
+	// A probe 8.7 ms away only bounds a disk of ~850 km: the city is a guess.
+	info := map[netip.Addr]enrich.Info{a: {Class: enrich.ClassPublic, IPmap: sj(8.7, "latency")}}
+	if l := Judge([]Hop{{TTL: 1, Addrs: []netip.Addr{a}, MinRTT: 60}}, info, &dfw)[0].Location; l == nil || !l.Weak {
+		t.Errorf("far probe: kept %+v, want a weak guess", l)
+	}
+}
+
 // A bare IATA guess that physics rules out is dropped without a flag ("ldn"
 // read as Lamidanda, Nepal, for a London router).
 func TestWeakGuess(t *testing.T) {

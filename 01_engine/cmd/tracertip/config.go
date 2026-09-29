@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/rbn8080/tracertip/01_engine/internal/enrich"
 	"github.com/rbn8080/tracertip/01_engine/internal/judge"
 )
 
@@ -47,4 +48,15 @@ func loadConfig(path string, explicit bool) (config, error) {
 		return c, fmt.Errorf("%s: origin out of range", path)
 	}
 	return c, nil
+}
+
+// enrichOptions joins the flags with the configuration; the IPmap cache is
+// per user, so it works whoever owns the bases folder.
+func enrichOptions(c config, dir, resolver string, noDNS, noIPmap bool) enrich.Options {
+	o := enrich.Options{Dir: first(dir, c.Bases, defaultBasesDir()), Resolver: first(resolver, c.Resolver),
+		NoDNS: noDNS, NoIPmap: noIPmap, AccessASN: c.AccessASN}
+	if d, err := os.UserCacheDir(); err == nil {
+		o.IPmapCache = filepath.Join(d, "tracertip", "ipmap.json")
+	}
+	return o
 }

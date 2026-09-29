@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/rbn8080/tracertip/01_engine/internal/enrich"
@@ -24,13 +25,18 @@ type HopRecord struct {
 	judge.Verdict
 	Sent    int          `json:"sent"`
 	Replied int          `json:"replied"`
-	Home    bool         `json:"home,omitempty"` // hidden in public output
+	Home    bool         `json:"home,omitempty"`  // hidden in public output
+	Round   *int         `json:"round,omitempty"` // watch mode: last round in the window
 	Info    *enrich.Info `json:"info,omitempty"`
 }
 
+// FlagRouteChange marks a hop whose address changed since the last update.
+const FlagRouteChange = "route-change"
+
 // Records builds the hop records. With public set, the home side (every hop
 // before the first transit hop, and any private or CGNAT hop) keeps only its
-// TTL and RTT; accessASN is the home ISP's AS.
+// TTL and RTT; accessASN is the home ISP's AS. Distances from the origin are
+// dropped too: three located hops would give the origin away.
 func Records(hops []judge.Hop, v []judge.Verdict, info map[netip.Addr]enrich.Info, accessASN int, public bool) []HopRecord {
 	home := HomeSide(hops, info, accessASN)
 	out := make([]HopRecord, len(hops))
@@ -40,12 +46,33 @@ func Records(hops []judge.Hop, v []judge.Verdict, info map[netip.Addr]enrich.Inf
 			inf := info[h.Addrs[0]]
 			r.Info = &inf
 		}
-		if public && home[i] {
-			r = HopRecord{V: r.V, Type: r.Type, Verdict: judge.Verdict{TTL: h.TTL, MinRTT: h.MinRTT}, Sent: h.Sent, Replied: h.Replied, Home: true}
+		switch {
+		case public && home[i]:
+			r = HopRecord{V: r.V, Type: r.Type, Verdict: judge.Verdict{TTL: h.TTL, MinRTT: h.MinRTT, MaxKm: v[i].MaxKm},
+				Sent: h.Sent, Replied: h.Replied, Home: true}
+		case public:
+			r.Candidates = slices.Clone(r.Candidates)
+			for j := range r.Candidates {
+				r.Candidates[j].Km, r.Candidates[j].NeedMs = 0, 0
+			}
+			if l := r.Location; l != nil {
+				c := *l
+				c.Km, c.NeedMs = 0, 0
+				r.Location = &c
+			}
 		}
 		out[i] = r
 	}
 	return out
+}
+
+// MarkChanges flags the hops whose first address differs from prev's.
+func MarkChanges(prev, cur []HopRecord) {
+	for i := range cur {
+		if i < len(prev) && prev[i].Addr != "" && cur[i].Addr != "" && prev[i].Addr != cur[i].Addr {
+			cur[i].Flags = append(slices.Clone(cur[i].Flags), FlagRouteChange)
+		}
+	}
 }
 
 // HomeSide marks the hops of the home and the access ISP.
@@ -79,12 +106,18 @@ func WriteJSON(w io.Writer, recs []HopRecord) error {
 	return nil
 }
 
-// WriteTable writes one line per hop; '*' is a gap, never 0 ms.
+// WriteTable writes one line per hop; '*' is a gap, never 0 ms. The km column
+// is the distance from the origin when the hop is located, else the most
+// physics allows ("<"); +km is the jump from the previous located hop.
 func WriteTable(w io.Writer, recs []HopRecord) {
+	if len(recs) == 0 {
+		return
+	}
 	width := len("[home]")
 	for _, r := range recs {
 		width = max(width, len(r.Addr)) // IPv6 addresses are up to 39 characters
 	}
+	fmt.Fprintf(w, "%2s  %-*s %8s %7s %7s  %-26s %s\n", "", width, "address", "rtt", "km", "+km", "network", "location")
 	for _, r := range recs {
 		switch {
 		case r.Home:
@@ -94,7 +127,8 @@ func WriteTable(w io.Writer, recs []HopRecord) {
 			fmt.Fprintf(w, "%2d  *\n", r.TTL)
 			continue
 		}
-		fmt.Fprintf(w, "%2d  %-*s %8s  %-26s %-28s %s\n", r.TTL, width, r.Addr, rtt(r.MinRTT), network(r), where(r), strings.Join(r.Flags, " "))
+		fmt.Fprintf(w, "%2d  %-*s %8s %7s %7s  %-26s %-28s %s\n", r.TTL, width, r.Addr, rtt(r.MinRTT), km(r), jump(r),
+			network(r), where(r), strings.Join(r.Flags, " "))
 		switch s := r.Segment; {
 		case s == nil || s.GainMs < segmentNoteMs:
 		case s.NeedMs < localMs:
@@ -139,11 +173,36 @@ func network(r HopRecord) string {
 	return fmt.Sprintf("AS%d %s", inf.AS[0].ASN, trim(inf.AS[0].Name, 16))
 }
 
-func where(r HopRecord) string {
-	if l := r.Location; l != nil {
-		return trim(fmt.Sprintf("%s, %s [%s]", l.City, l.Country, l.Source), 28)
+func km(r HopRecord) string {
+	switch {
+	case r.Location != nil && r.Location.Km > 0:
+		return fmt.Sprintf("%.0f", r.Location.Km)
+	case r.MaxKm > 0:
+		return fmt.Sprintf("<%.0f", r.MaxKm)
 	}
 	return ""
+}
+
+func jump(r HopRecord) string {
+	if r.Segment == nil {
+		return ""
+	}
+	return fmt.Sprintf("+%.0f", r.Segment.Km)
+}
+
+func where(r HopRecord) string {
+	l := r.Location
+	if l == nil {
+		return ""
+	}
+	src, city := l.Source, l.City
+	if strings.HasPrefix(src, "ipmap:") && src != "ipmap:rtt" { // rtt: a RIPE Atlas probe within 1 ms
+		src = "ipmap"
+	}
+	if l.Weak {
+		city += "?"
+	}
+	return trim(fmt.Sprintf("%s, %s [%s]", city, l.Country, src), 28)
 }
 
 func trim(s string, n int) string {

@@ -1,0 +1,11 @@
+# Daily. Persistent: a run missed while the node was off happens at boot.
+[Unit]
+Description=tracertip: daily update of the IP bases
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

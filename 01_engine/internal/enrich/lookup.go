@@ -40,7 +40,9 @@ type dbResult struct {
 // lookupBases scans each base once and answers only for the wanted
 // addresses (binary search per range), so no base is held in memory; this is
 // the design of 00_verification/analysis/asn.go.
-func lookupBases(dir string, addrs []netip.Addr) (map[netip.Addr]*dbResult, error) {
+// lookupBases scans the AS bases, the city base or both for addrs. The city
+// base is by far the slowest, and only the target uses it.
+func lookupBases(dir string, addrs []netip.Addr, asn, city bool) (map[netip.Addr]*dbResult, error) {
 	keys := slices.Clone(addrs)
 	slices.SortFunc(keys, func(a, b netip.Addr) int { return a.Compare(b) })
 	keys = slices.Compact(keys)
@@ -54,7 +56,7 @@ func lookupBases(dir string, addrs []netip.Addr) (map[netip.Addr]*dbResult, erro
 			fn(out[keys[i]])
 		}
 	}
-	asn := func(src string) func(ipdb.ASNRange) error {
+	byAS := func(src string) func(ipdb.ASNRange) error {
 		return func(r ipdb.ASNRange) error {
 			each(r.Lo, r.Hi, func(d *dbResult) {
 				d.asn = append(d.asn, AS{ASN: r.ASN, Name: r.Name, Country: r.Country, Source: src})
@@ -64,13 +66,14 @@ func lookupBases(dir string, addrs []netip.Addr) (map[netip.Addr]*dbResult, erro
 	}
 	scans := []struct {
 		file string
+		city bool
 		read func(io.Reader) error
 	}{
-		{"ip2asn-v4.tsv.gz", func(r io.Reader) error { _, err := ipdb.ReadIPtoASN(r, asn("iptoasn")); return err }},
-		{"ip2asn-v6.tsv.gz", func(r io.Reader) error { _, err := ipdb.ReadIPtoASN(r, asn("iptoasn")); return err }},
-		{"dbip-asn-lite.csv.gz", func(r io.Reader) error { _, err := ipdb.ReadDBIPASN(r, asn("dbip-asn")); return err }},
-		{"ipinfo_lite.csv.gz", func(r io.Reader) error { _, err := ipdb.ReadIPinfoLite(r, asn("ipinfo")); return err }},
-		{"dbip-city-lite.csv.gz", func(r io.Reader) error {
+		{"ip2asn-v4.tsv.gz", false, func(r io.Reader) error { _, err := ipdb.ReadIPtoASN(r, byAS("iptoasn")); return err }},
+		{"ip2asn-v6.tsv.gz", false, func(r io.Reader) error { _, err := ipdb.ReadIPtoASN(r, byAS("iptoasn")); return err }},
+		{"dbip-asn-lite.csv.gz", false, func(r io.Reader) error { _, err := ipdb.ReadDBIPASN(r, byAS("dbip-asn")); return err }},
+		{"ipinfo_lite.csv.gz", false, func(r io.Reader) error { _, err := ipdb.ReadIPinfoLite(r, byAS("ipinfo")); return err }},
+		{"dbip-city-lite.csv.gz", true, func(r io.Reader) error {
 			_, err := ipdb.ReadDBIPCity(r, func(c ipdb.CityRange) error {
 				each(c.Lo, c.Hi, func(d *dbResult) {
 					d.city = &City{City: c.City, Country: c.Country, Lat: c.Lat, Lon: c.Lon, Source: "dbip-city"}
@@ -81,6 +84,9 @@ func lookupBases(dir string, addrs []netip.Addr) (map[netip.Addr]*dbResult, erro
 		}},
 	}
 	for _, s := range scans {
+		if s.city && !city || !s.city && !asn {
+			continue
+		}
 		err := readGz(filepath.Join(dir, s.file), s.read)
 		if errors.Is(err, os.ErrNotExist) {
 			continue // an absent base answers nothing; the output says which bases were used

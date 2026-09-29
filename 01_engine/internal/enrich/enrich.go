@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Info is everything known about one address, each answer with its source.
@@ -19,6 +20,7 @@ type Info struct {
 	DBCity  *City    `json:"db_city,omitempty"`
 	IXP     *IXP     `json:"ixp,omitempty"`
 	Anycast *Anycast `json:"anycast,omitempty"` // listed by a census
+	IPmap   *IPmap   `json:"ipmap,omitempty"`   // RIPE IPmap: city, measured or named
 }
 
 // Options says where the bases are and how to resolve names.
@@ -27,6 +29,11 @@ type Options struct {
 	Hints    string // optional hint table; default Dir/geohints.tsv
 	Resolver string // "host:port"; empty = system resolver
 	NoDNS    bool
+	NoCity   bool // skip the city base; see DBCity
+	// RIPE IPmap. Home-side addresses (the access ISP's AS) are never sent.
+	NoIPmap    bool
+	IPmapCache string // file; empty = no cache
+	AccessASN  int
 }
 
 // Enrich answers for every address. Special-purpose addresses get their class
@@ -41,7 +48,7 @@ func Enrich(ctx context.Context, addrs []netip.Addr, o Options) (map[netip.Addr]
 			public = append(public, a)
 		}
 	}
-	db, err := lookupBases(o.Dir, public)
+	db, err := lookupBases(o.Dir, public, true, !o.NoCity)
 	if err != nil {
 		return nil, err
 	}
@@ -67,8 +74,19 @@ func Enrich(ctx context.Context, addrs []netip.Addr, o Options) (map[netip.Addr]
 	} else if err != nil {
 		return nil, err // a bad hint table fails loudly (P5)
 	}
+	var located map[netip.Addr]*IPmap
+	if !o.NoIPmap {
+		var ask []netip.Addr
+		for _, a := range public {
+			if d := db[a]; o.AccessASN == 0 || d == nil || len(d.asn) == 0 || d.asn[0].ASN != o.AccessASN {
+				ask = append(ask, a)
+			}
+		}
+		located = lookupIPmap(ctx, o.IPmapCache, ask, time.Now())
+	}
 	for _, a := range public {
 		inf := out[a]
+		inf.IPmap = located[a]
 		if d := db[a]; d != nil {
 			inf.AS, inf.DBCity = d.asn, d.city
 		}
@@ -81,4 +99,17 @@ func Enrich(ctx context.Context, addrs []netip.Addr, o Options) (map[netip.Addr]
 		out[a] = inf
 	}
 	return out, nil
+}
+
+// DBCity looks a single address up in the city base alone, so that a trace can
+// run it while it probes.
+func DBCity(dir string, a netip.Addr) (*City, error) {
+	if class, _ := Classify(a); class != ClassPublic {
+		return nil, nil
+	}
+	db, err := lookupBases(dir, []netip.Addr{a}, false, true)
+	if err != nil {
+		return nil, err
+	}
+	return db[a].city, nil
 }

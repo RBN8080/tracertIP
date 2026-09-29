@@ -35,7 +35,7 @@ type Config struct {
 	Target        netip.Addr
 	Source        netip.Addr    // IPv6 only: the checksum covers it (RFC 8200 8.1)
 	TTLMax        int           // 40: longest Phase 0 path was 31 hops
-	Rounds        int           // rounds of TTL 1..cap
+	Rounds        int           // rounds of TTL 1..cap; 0 = until ctx ends (watch)
 	Timeout       time.Duration // 2000 ms per probe; worst Phase 0 RTT was 842 ms
 	RoundInterval time.Duration // one round every 2 s per target
 	Spacing       time.Duration // between TTLs of a round, against ICMP rate limits
@@ -200,7 +200,7 @@ func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error
 		return nil
 	}
 
-	for round := 0; round < cfg.Rounds; round++ {
+	for round := 0; cfg.Rounds == 0 || round < cfg.Rounds; round++ {
 		roundStart := time.Now()
 		for ttl := 1; ; ttl++ {
 			mu.Lock()
@@ -236,7 +236,7 @@ func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error
 				return result(err)
 			}
 		}
-		if round < cfg.Rounds-1 {
+		if cfg.Rounds == 0 || round < cfg.Rounds-1 {
 			if err := sleep(ctx, time.Until(roundStart.Add(cfg.RoundInterval))); err != nil {
 				return result(err)
 			}

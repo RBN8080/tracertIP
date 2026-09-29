@@ -3,6 +3,7 @@ package judge
 import (
 	"fmt"
 	"net/netip"
+	"strings"
 
 	"github.com/rbn8080/tracertip/01_engine/internal/enrich"
 )
@@ -13,11 +14,11 @@ type Candidate struct {
 	Country  string  `json:"country"`
 	Lat      float64 `json:"lat"`
 	Lon      float64 `json:"lon"`
-	Source   string  `json:"source"` // "name:iata:syd", "name:table:lsanca", "db:dbip-city"
-	Km       float64 `json:"km"`     // from the origin
-	NeedMs   float64 `json:"need_ms"`
+	Source   string  `json:"source"`            // "ipmap:latency", "name:iata:syd", "name:table:lsanca", "db:dbip-city"
+	Km       float64 `json:"km,omitempty"`      // from the origin; hidden in public output
+	NeedMs   float64 `json:"need_ms,omitempty"` // likewise: it gives Km away
 	Possible bool    `json:"possible"`
-	Weak     bool    `json:"weak,omitempty"` // a bare IATA guess from the name
+	Weak     bool    `json:"weak,omitempty"` // a guess: bare IATA code, or IPmap by population
 }
 
 // Segment is the stretch from the previous located hop. Efficiency compares
@@ -35,7 +36,8 @@ type Segment struct {
 type Verdict struct {
 	TTL        int         `json:"ttl"`
 	Addr       string      `json:"addr,omitempty"`
-	MinRTT     float64     `json:"min_rtt_ms"` // <0: no reply
+	MinRTT     float64     `json:"min_rtt_ms"`       // <0: no reply
+	MaxKm      float64     `json:"max_km,omitempty"` // physics: at most this far from the origin
 	Location   *Candidate  `json:"location,omitempty"`
 	Candidates []Candidate `json:"candidates,omitempty"`
 	Segment    *Segment    `json:"segment,omitempty"`
@@ -65,6 +67,9 @@ func Judge(hops []Hop, info map[netip.Addr]enrich.Info, origin *Coord) []Verdict
 	lastLocated := -1
 	for i, h := range hops {
 		v := Verdict{TTL: h.TTL, MinRTT: h.MinRTT}
+		if h.MinRTT > 0 {
+			v.MaxKm = h.MinRTT / 2 * fiberKmPerMs
+		}
 		if len(h.Addrs) > 0 {
 			a := h.Addrs[0]
 			v.Addr = a.String()
@@ -107,7 +112,10 @@ func Judge(hops []Hop, info map[netip.Addr]enrich.Info, origin *Coord) []Verdict
 	return out
 }
 
-// candidates lists the claimed locations: name hints first, then the base.
+// candidates lists the claimed locations, strongest first: an IPmap city
+// measured from a nearby RIPE Atlas probe (Du et al., CCR 2020), backed name
+// hints, IPmap cities backed by a name or an IXP, then guesses (bare IATA
+// codes, other IPmap cities) and the base.
 func candidates(inf enrich.Info, origin Coord, rtt float64) []Candidate {
 	var cs []Candidate
 	add := func(c Candidate) {
@@ -116,10 +124,30 @@ func candidates(inf enrich.Info, origin Coord, rtt float64) []Candidate {
 		c.Possible = rtt >= c.NeedMs
 		cs = append(cs, c)
 	}
-	for _, p := range inf.Places {
-		add(Candidate{City: p.City, Country: p.Country, Lat: p.Lat, Lon: p.Lon, Weak: p.Weak,
-			Source: fmt.Sprintf("name:%s:%s", p.Source, p.Token)})
+	m := inf.IPmap
+	ipmap := func(ok bool, weak bool) {
+		if m == nil || !ok {
+			return
+		}
+		src := "ipmap:" + strings.Join(m.Engines, "+")
+		if m.Measured() {
+			src = "ipmap:rtt"
+		}
+		add(Candidate{City: m.City, Country: m.Country, Lat: m.Lat, Lon: m.Lon, Weak: weak, Source: src})
 	}
+	names := func(weak bool) {
+		for _, p := range inf.Places {
+			if p.Weak == weak {
+				add(Candidate{City: p.City, Country: p.Country, Lat: p.Lat, Lon: p.Lon, Weak: p.Weak,
+					Source: fmt.Sprintf("name:%s:%s", p.Source, p.Token)})
+			}
+		}
+	}
+	ipmap(m != nil && m.Measured(), false)
+	names(false)
+	ipmap(m != nil && !m.Measured() && m.Backed(), false)
+	names(true)
+	ipmap(m != nil && !m.Measured() && !m.Backed(), true)
 	if c := inf.DBCity; c != nil {
 		add(Candidate{City: c.City, Country: c.Country, Lat: c.Lat, Lon: c.Lon, Source: "db:" + c.Source})
 	}

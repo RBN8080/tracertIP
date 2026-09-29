@@ -55,6 +55,20 @@ func TestPublicHidesHome(t *testing.T) {
 	if priv := Records(hops, v, info, accessASN, false); priv[2].Home || priv[2].Info == nil {
 		t.Errorf("private output hid hop 3: %+v", priv[2])
 	}
+
+	// A located hop's distance from the origin gives the origin away.
+	inf := info[transit]
+	inf.Places = []enrich.Place{{Token: "dfw", City: "Dallas", Country: "US", Lat: 32.9, Lon: -97.04, Source: "iata"}}
+	info[transit] = inf
+	v = judge.Judge(hops, info, &judge.Coord{Lat: 29.4, Lon: -98.5})
+	if v[4].Location == nil || v[4].Location.Km == 0 {
+		t.Fatalf("transit hop not located: %+v", v[4])
+	}
+	js.Reset()
+	WriteJSON(&js, Records(hops, v, info, accessASN, true))
+	if s := js.String(); strings.Contains(s, `"km"`) || strings.Contains(s, `"need_ms"`) {
+		t.Errorf("public output shows distances from the origin:\n%s", s)
+	}
 }
 
 // A long gain within one metro is not explained by distance, so it gets no
@@ -68,7 +82,7 @@ func TestSegmentNote(t *testing.T) {
 		rec(judge.Segment{FromTTL: 4, Km: 13, NeedMs: 0.13, GainMs: 44.7, Efficiency: 0.003}),
 		rec(judge.Segment{FromTTL: 4, Km: 12061, NeedMs: 118.1, GainMs: 132, Efficiency: 0.89}),
 	})
-	lines := strings.Split(b.String(), "\n")
+	lines := strings.Split(b.String(), "\n")[1:] // after the header
 	if !strings.Contains(lines[1], "within 13 km: not distance") || strings.Contains(lines[1], "efficiency") {
 		t.Errorf("same metro: %q", lines[1])
 	}
