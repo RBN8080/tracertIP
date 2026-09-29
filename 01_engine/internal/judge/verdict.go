@@ -100,7 +100,7 @@ func Judge(hops []Hop, info map[netip.Addr]enrich.Info, origin *Coord) []Verdict
 				v.Location, v.Flags = choose(v.Candidates, h.Target, v.Flags)
 			}
 		}
-		if v.Location != nil {
+		if v.Location != nil && !v.Location.Weak { // no efficiency from a guessed place
 			if lastLocated >= 0 {
 				v.Segment = segment(hops, out, lastLocated, i, v)
 			}

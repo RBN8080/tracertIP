@@ -109,6 +109,17 @@ func TestIPmapOrder(t *testing.T) {
 	if l := Judge([]Hop{{TTL: 1, Addrs: []netip.Addr{a}, MinRTT: 60}}, info, &dfw)[0].Location; l == nil || !l.Weak {
 		t.Errorf("far probe: kept %+v, want a weak guess", l)
 	}
+
+	// A guessed place gets no segment, and the next segment starts from the
+	// last confident one ("Vienna?" after Jacksonville, 2026-09-29).
+	b, c := netip.MustParseAddr("192.0.2.2"), netip.MustParseAddr("192.0.2.3")
+	info[b] = enrich.Info{Class: enrich.ClassPublic, Places: []enrich.Place{place("lax", lax, "US")}}
+	info[c] = enrich.Info{Class: enrich.ClassPublic, Places: []enrich.Place{place("syd", syd, "AU")}}
+	v := Judge([]Hop{{TTL: 1, Addrs: []netip.Addr{b}, MinRTT: 30}, {TTL: 2, Addrs: []netip.Addr{a}, MinRTT: 60},
+		{TTL: 3, Addrs: []netip.Addr{c}, MinRTT: 180}}, info, &dfw)
+	if v[1].Location == nil || v[1].Segment != nil || v[2].Segment == nil || v[2].Segment.FromTTL != 1 {
+		t.Errorf("guess got a segment or broke the chain: %+v / %+v", v[1].Segment, v[2].Segment)
+	}
 }
 
 // A bare IATA guess that physics rules out is dropped without a flag ("ldn"
