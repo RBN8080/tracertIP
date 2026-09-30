@@ -90,4 +90,4 @@ MIT. See `LICENSE`.
 
 ---
 
-*Updated: 2026-09-30 12:40 UTC.*
+*Updated: 2026-09-30 12:31 UTC.*

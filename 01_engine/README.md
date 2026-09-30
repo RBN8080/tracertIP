@@ -19,4 +19,4 @@ Probe → enrich → judge → output (console table and JSON Lines, schema in `
 
 **Status:** Phase 1 closed on 2026-09-29. The first study rehearsal exposed two defects in batch mode, fixed on 2026-09-30; the engine is frozen again while the study runs.
 
-*Updated: 2026-09-30 12:40 UTC.*
+*Updated: 2026-09-30 12:31 UTC.*
