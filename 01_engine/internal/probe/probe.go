@@ -58,11 +58,12 @@ const beyondTarget = 2
 
 // Summary describes a finished trace.
 type Summary struct {
-	Reached   bool
-	TargetTTL int // TTL of the first Echo Reply from the target; 0 if never
-	Probes    int
-	NoReply   int
-	LateLost  int // replies that came after their probe was already written
+	Reached    bool
+	TargetTTL  int // TTL of the first Echo Reply from the target; 0 if never
+	Probes     int
+	NoReply    int
+	SendErrors int // probes the node could not send
+	LateLost   int // replies that came after their probe was already written
 }
 
 type pending struct {
@@ -189,8 +190,11 @@ func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error
 			}
 			mu.Lock()
 			sum.Probes++
-			if rec.Status == model.StatusNoReply {
+			switch rec.Status {
+			case model.StatusNoReply:
 				sum.NoReply++
+			case model.StatusSendError:
+				sum.SendErrors++
 			}
 			mu.Unlock()
 			if err := emit(rec); err != nil {

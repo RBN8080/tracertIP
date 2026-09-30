@@ -25,7 +25,7 @@ echo 'last runs'
 for f in $(ls -1t "$d"/runs/*/*.jsonl 2>/dev/null | head -4); do
 	printf '  %s  %s\n' "$(basename "$(dirname "$f")")/$(basename "$f" .jsonl)" \
 		"$(grep '"type":"run_end"' "$f" | tail -1 |
-			sed -E 's/.*"traced":([0-9]+)(,"skipped":([0-9]+))?,"reached":([0-9]+).*/traced \1, reached \4, skipped \3/; s/skipped $/skipped 0/')"
+			jq -r '"traced \(.traced), reached \(.reached), skipped \(.skipped // 0), unmeasured \(.unmeasured // 0)"')"
 done
 printf 'aborted  %s\n' "$(ls "$d"/runs/*/*.aborted-* 2>/dev/null | wc -l)"
 printf 'replaced %s\n' "$(cat "$d"/replacements.jsonl 2>/dev/null | wc -l)"

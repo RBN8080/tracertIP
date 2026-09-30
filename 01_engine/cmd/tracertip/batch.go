@@ -47,7 +47,10 @@ type runEnd struct {
 	Time    time.Time `json:"time"`
 	Traced  int       `json:"traced"`
 	Skipped int       `json:"skipped,omitempty"` // left for lack of time before the next slot
-	Reached int       `json:"reached"`
+	// Unmeasured traces failed on the node's side (no route, no socket,
+	// probes not sent): they say nothing about the target.
+	Unmeasured int `json:"unmeasured,omitempty"`
+	Reached    int `json:"reached"`
 }
 
 type traceError struct {
@@ -229,13 +232,17 @@ func (o *observer) revalidate(ctx context.Context, day string) error {
 			}
 			answered++
 			recs = append(recs, c)
-			if r.Announced && len(r.Origins) == 1 && (e.AS(fam) == 0 || r.Origins[0] == e.AS(fam)) {
-				continue
-			}
-			rep := o.st.Replace(i, fmt.Sprintf("%s prefix %s: announced=%t, origins %v, declared AS%d", fam, r.Prefix, r.Announced, r.Origins, e.AS(fam)), time.Now())
+			ok := r.Announced && len(r.Origins) == 1 && (e.AS(fam) == 0 || r.Origins[0] == e.AS(fam))
+			reason := fmt.Sprintf("%s prefix %s: announced=%t, origins %v, declared AS%d, on %d daily checks in a row",
+				fam, r.Prefix, r.Announced, r.Origins, e.AS(fam), batch.BGPFailLimit)
+			rep := o.st.Routing(i, fam, ok, reason, time.Now())
 			if rep == nil {
-				continue // fixed targets stay
+				if !ok {
+					fmt.Fprintf(o.log, "tracertip: %s failed its routing check: announced=%t, origins %v\n", a, r.Announced, r.Origins)
+				}
+				continue // fixed targets stay; a first failure waits for the next day
 			}
+			fmt.Fprintf(o.log, "tracertip: %s replaced: %s\n", a, rep.Reason)
 			recs = append(recs, rep)
 			if err := batch.Append(filepath.Join(o.dir, "replacements.jsonl"), rep); err != nil {
 				return err
@@ -287,6 +294,7 @@ func (o *observer) run(ctx context.Context, slot time.Time, fam string) error {
 	// so a slow run never delays the next one.
 	per := time.Duration(o.rounds)*probe.Defaults.RoundInterval + probe.Defaults.Timeout
 	deadline := slot.Add(o.every)
+	verdict := map[int]bool{} // index in Active: did the target answer
 	for i := 0; i < len(o.st.Active); i++ {
 		a := o.st.Active[i].Addr(fam)
 		if !a.IsValid() {
@@ -306,28 +314,27 @@ func (o *observer) run(ctx context.Context, slot time.Time, fam string) error {
 			return ctx.Err()
 		}
 		if err != nil {
+			// The node did not measure: no verdict on the target.
 			rf.Write(traceError{V: 1, Type: "error", Time: time.Now().UTC(), Target: a.String(), Error: err.Error()})
-		}
-		end.Traced++
-		if reached {
-			end.Reached++
-		}
-		if r := o.st.Result(i, fam, reached, time.Now()); r != nil {
-			fmt.Fprintf(o.log, "tracertip: %s replaced: %s\n", a, r.Reason)
-			rf.Write(r)
-			if err := batch.Append(filepath.Join(o.dir, "replacements.jsonl"), r); err != nil {
-				rf.Abort()
-				return err
+			end.Unmeasured++
+		} else {
+			end.Traced++
+			if reached {
+				end.Reached++
 			}
-			if r.In == nil {
-				i-- // the target left and the list shrank
-			}
+			verdict[i] = reached
 		}
 		if err := rf.Sync(); err != nil {
 			rf.Abort()
 			return err
 		}
-		if err := o.st.Save(filepath.Join(o.dir, "state.json")); err != nil {
+	}
+	// Misses are judged with the whole run in view, so an outage on the
+	// node's side never empties the target list.
+	for _, r := range o.st.Settle(fam, verdict, time.Now()) {
+		fmt.Fprintf(o.log, "tracertip: %s replaced: %s\n", r.Out.Addr(fam), r.Reason)
+		rf.Write(r)
+		if err := batch.Append(filepath.Join(o.dir, "replacements.jsonl"), r); err != nil {
 			rf.Abort()
 			return err
 		}
@@ -380,9 +387,15 @@ func (o *observer) trace(ctx context.Context, a netip.Addr, rounds int, write fu
 			return false, err
 		}
 	}
-	return sum.Reached, write(model.End{V: model.SchemaVersion, Type: model.TypeEnd, Time: time.Now().UTC(),
+	if err := write(model.End{V: model.SchemaVersion, Type: model.TypeEnd, Time: time.Now().UTC(),
 		Reached: sum.Reached, Hops: sum.TargetTTL, Probes: sum.Probes, NoReply: sum.NoReply,
-		DurationMS: time.Since(begin).Milliseconds()})
+		DurationMS: time.Since(begin).Milliseconds()}); err != nil {
+		return false, err
+	}
+	if !sum.Reached && sum.SendErrors > 0 {
+		return false, fmt.Errorf("%d of %d probes not sent", sum.SendErrors, sum.Probes)
+	}
+	return sum.Reached, nil
 }
 
 // shortTraces gives each fixed target a 2-round trace when one is due: the
@@ -473,11 +486,11 @@ func batchReport(dir string, every time.Duration, stdout, stderr io.Writer) int 
 		fmt.Fprintln(stderr, "tracertip:", err)
 		return exitFail
 	}
-	fmt.Fprintf(stdout, "%-10s %5s %8s %10s %8s %5s %4s %7s %7s %7s %3s %6s %8s %8s\n",
-		"day", "slots", "complete", "incomplete", "no-clock", "short", "gaps", "late-s", "run-min", "skipped", "hot", "max°C", "min-disk", "replaced")
+	fmt.Fprintf(stdout, "%-10s %5s %8s %10s %8s %5s %4s %7s %7s %7s %10s %4s %3s %6s %8s %8s\n",
+		"day", "slots", "complete", "incomplete", "no-clock", "short", "gaps", "late-s", "run-min", "skipped", "unmeasured", "dark", "hot", "max°C", "min-disk", "replaced")
 	for _, d := range sum.Days {
-		fmt.Fprintf(stdout, "%-10s %5d %8d %10d %8d %5d %4d %7.0f %7.1f %7d %3d %6.1f %6dMB %8d\n",
-			d.Day, d.Slots, d.Complete, d.Incomplete, d.NoClock, d.Short, d.Gaps, d.MaxLateS, d.MaxRunMin, d.Skipped,
+		fmt.Fprintf(stdout, "%-10s %5d %8d %10d %8d %5d %4d %7.0f %7.1f %7d %10d %4d %3d %6.1f %6dMB %8d\n",
+			d.Day, d.Slots, d.Complete, d.Incomplete, d.NoClock, d.Short, d.Gaps, d.MaxLateS, d.MaxRunMin, d.Skipped, d.Unmeasured, d.Dark,
 			d.Hot, d.MaxTempC, d.MinDiskMB, d.Replaced)
 	}
 	fmt.Fprintf(stdout, "engine: %s\nbases lists seen: %d\n", strings.Join(sum.Engines, ", "), len(sum.Bases))

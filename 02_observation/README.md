@@ -15,7 +15,8 @@ The engine running untouched on the measurement host for at least 14 days, over 
   - no faster than light in fiber from its declared place.
 - **Runs:** `tracertip batch` alternates IPv4 and IPv6 on 30-minute UTC slots and traces one target at a time.
   - Fixed targets also get a 2-round trace every 5 minutes.
-  - A target that misses 4 runs in a row, or whose prefix changes origin, is replaced by its continent's reserve. The replacement is logged.
+  - A target that misses 4 runs in a row, or fails the daily routing check 2 days in a row, is replaced by its continent's reserve. The replacement is logged.
+  - The node's own outages never count against a target: a trace the node could not make (no route, probes not sent) is `unmeasured`, and misses are ignored in a run where fewer than half of the targets answered.
 - **Data:** one JSON Lines file per run, synced after every trace, plus:
   - the state;
   - the replacements;

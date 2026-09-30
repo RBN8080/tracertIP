@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/rbn8080/tracertip/01_engine/internal/ipdb"
@@ -25,6 +26,11 @@ const (
 // FailLimit is the default number of runs of one family in a row a target
 // may miss before the reserve replaces it.
 const FailLimit = 4
+
+// BGPFailLimit is the number of daily routing checks in a row a target must
+// fail before it is replaced: one bad answer can be the data service's own
+// (a target that RIPEstat called unannounced was answering every probe).
+const BGPFailLimit = 2
 
 // Entry is one target of the batch.
 type Entry struct {
@@ -75,8 +81,9 @@ type Replacement struct {
 type State struct {
 	FailLimit int                `json:"fail_limit"`
 	Active    []Entry            `json:"active"`
-	Reserve   map[string][]Entry `json:"reserve"` // by continent, in rank order
-	Fails     map[string]int     `json:"fails"`   // runs missed in a row, by target and family
+	Reserve   map[string][]Entry `json:"reserve"`             // by continent, in rank order
+	Fails     map[string]int     `json:"fails"`               // runs missed in a row, by target and family
+	BGPFails  map[string]int     `json:"bgp_fails,omitempty"` // daily routing checks failed in a row
 	Runs      int                `json:"runs"`
 	LastRun   time.Time          `json:"last_run,omitzero"` // slot of the last run
 	Checked   string             `json:"checked,omitempty"` // UTC day of the last revalidation
@@ -122,6 +129,52 @@ func (s *State) Result(i int, fam string, reached bool, now time.Time) *Replacem
 	return s.Replace(i, fmt.Sprintf("no echo reply over %s in %d runs in a row", fam, s.FailLimit), now)
 }
 
+// Settle records a run's verdicts: reached says, by index in Active, whether
+// each target that was measured answered. Misses count only when at least
+// half of the measured targets answered: below that, the fault is on the
+// vantage point's side and says nothing about the targets (Paxson, IMC 2004).
+func (s *State) Settle(fam string, reached map[int]bool, now time.Time) []*Replacement {
+	var missed []int
+	for i, ok := range reached {
+		if ok {
+			delete(s.Fails, s.Active[i].key(fam))
+		} else {
+			missed = append(missed, i)
+		}
+	}
+	if 2*(len(reached)-len(missed)) < len(reached) {
+		return nil
+	}
+	// From the end: a target that leaves shifts the ones after it.
+	slices.Sort(missed)
+	slices.Reverse(missed)
+	var out []*Replacement
+	for _, i := range missed {
+		if r := s.Result(i, fam, false, now); r != nil {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// Routing records a target's daily routing check in one family. A study
+// target leaves after BGPFailLimit failed checks in a row.
+func (s *State) Routing(i int, fam string, ok bool, reason string, now time.Time) *Replacement {
+	k := s.Active[i].key(fam)
+	if ok {
+		delete(s.BGPFails, k)
+		return nil
+	}
+	if s.BGPFails == nil {
+		s.BGPFails = map[string]int{}
+	}
+	s.BGPFails[k]++
+	if s.BGPFails[k] < BGPFailLimit {
+		return nil
+	}
+	return s.Replace(i, reason, now)
+}
+
 // Replace swaps a study target, in place, for the next reserve of its
 // continent, or drops it when the reserve is spent. Fixed targets stay.
 func (s *State) Replace(i int, reason string, now time.Time) *Replacement {
@@ -131,6 +184,8 @@ func (s *State) Replace(i int, reason string, now time.Time) *Replacement {
 	}
 	delete(s.Fails, e.key(V4))
 	delete(s.Fails, e.key(V6))
+	delete(s.BGPFails, e.key(V4))
+	delete(s.BGPFails, e.key(V6))
 	r := &Replacement{V: 1, Type: "replacement", Time: now.UTC(), Out: e, Reason: reason}
 	if q := s.Reserve[e.Continent]; len(q) > 0 {
 		in := q[0]

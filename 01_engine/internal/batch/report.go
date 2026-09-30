@@ -27,6 +27,8 @@ type Day struct {
 	MaxLateS   float64
 	MaxRunMin  float64 // longest whole run
 	Skipped    int     // targets left for lack of time
+	Unmeasured int     // traces that failed on the node's side
+	Dark       int     // whole runs in which no target answered
 	Hot        int     // runs started at 80 °C or more
 	MaxTempC   float64
 	MinDiskMB  int64
@@ -52,6 +54,8 @@ type runLine struct {
 	Targets     int       `json:"targets"`
 	Traced      int       `json:"traced"`
 	Skipped     int       `json:"skipped"`
+	Unmeasured  int       `json:"unmeasured"`
+	Reached     int       `json:"reached"`
 	Start       time.Time `json:"start"`
 	Time        time.Time `json:"time"`
 }
@@ -95,6 +99,10 @@ func Report(dir string, every time.Duration, now time.Time) (Summary, error) {
 		d.MaxLateS = max(d.MaxLateS, head.LateS)
 		if end != nil {
 			d.Skipped += end.Skipped
+			d.Unmeasured += end.Unmeasured
+			if end.Traced > 0 && end.Reached == 0 {
+				d.Dark++
+			}
 			if !head.Start.IsZero() && !end.Time.IsZero() {
 				d.MaxRunMin = max(d.MaxRunMin, end.Time.Sub(head.Start).Minutes())
 			}

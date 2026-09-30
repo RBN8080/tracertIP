@@ -41,7 +41,7 @@ func TestReport(t *testing.T) {
 			r.Abort()
 			return
 		}
-		r.Write(map[string]any{"v": 1, "type": "run_end", "traced": 2})
+		r.Write(map[string]any{"v": 1, "type": "run_end", "traced": 2, "unmeasured": 1})
 		r.Close()
 	}
 	write(s0, V4, true, true)
@@ -55,7 +55,7 @@ func TestReport(t *testing.T) {
 		t.Fatalf("days %+v", sum.Days)
 	}
 	d := sum.Days[0]
-	if d.Slots != 4 || d.Complete != 1 || d.NoClock != 1 || d.Incomplete != 1 || d.Gaps != 1 || d.Hot != 3 || d.MinDiskMB != 900 {
+	if d.Slots != 4 || d.Complete != 1 || d.NoClock != 1 || d.Incomplete != 1 || d.Gaps != 1 || d.Hot != 3 || d.MinDiskMB != 900 || d.Unmeasured != 2 || d.Dark != 2 {
 		t.Errorf("day %+v", d)
 	}
 	if len(sum.Engines) != 1 || sum.Engines[0] != "e1" {
@@ -144,5 +144,60 @@ func TestRunFileAndState(t *testing.T) {
 	}
 	if none, err := LoadState(filepath.Join(dir, "missing.json")); none != nil || err != nil {
 		t.Errorf("missing state: %v, %v", none, err)
+	}
+}
+
+// An outage on the node's side makes most targets miss: those misses do not
+// count, so it never replaces the whole list.
+func TestSettleIgnoresOwnOutage(t *testing.T) {
+	list := []targets.Target{entry(9, "EU", targets.RoleReserve)}
+	for id := 1; id <= 4; id++ {
+		list = append(list, entry(id, "EU", targets.RoleStudy))
+	}
+	s, err := NewState(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for range 3 * s.FailLimit {
+		if r := s.Settle(V6, map[int]bool{0: false, 1: false, 2: false, 3: true}, now); r != nil {
+			t.Fatalf("replaced during an outage: %+v", r)
+		}
+	}
+	if len(s.Fails) != 0 || len(s.Reserve["EU"]) != 1 {
+		t.Fatalf("an outage counted as misses: %v", s.Fails)
+	}
+	// One target of four missing is the target's own: it leaves at the limit.
+	var out []*Replacement
+	for range s.FailLimit {
+		out = s.Settle(V6, map[int]bool{0: true, 1: false, 2: true, 3: true}, now)
+	}
+	if len(out) != 1 || out[0].Out.ID != 2 || s.Active[1].ID != 9 {
+		t.Errorf("replacement %+v, active %+v", out, s.Active)
+	}
+	// A target left out of the verdicts (not measured) keeps its count.
+	s.Settle(V6, map[int]bool{0: false, 2: true, 3: true}, now)
+	s.Settle(V6, map[int]bool{2: true, 3: true}, now)
+	if s.Fails[s.Active[0].key(V6)] != 1 {
+		t.Errorf("an unmeasured target changed its count: %v", s.Fails)
+	}
+}
+
+// One failed routing check is not enough: the data service can be wrong.
+func TestRoutingNeedsTwoChecks(t *testing.T) {
+	s, err := NewState([]targets.Target{entry(1, "EU", targets.RoleStudy), entry(2, "EU", targets.RoleReserve)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if s.Routing(0, V6, false, "day 1", now) != nil {
+		t.Fatal("replaced on the first failed check")
+	}
+	if s.Routing(0, V6, true, "", now) != nil || len(s.BGPFails) != 0 {
+		t.Fatalf("a good check did not clear the count: %v", s.BGPFails)
+	}
+	s.Routing(0, V6, false, "day 3", now)
+	if r := s.Routing(0, V6, false, "day 4", now); r == nil || s.Active[0].ID != 2 || len(s.BGPFails) != 0 {
+		t.Errorf("after two failed checks in a row: %+v, active %+v", r, s.Active)
 	}
 }
