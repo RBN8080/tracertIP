@@ -2,7 +2,7 @@
 
 **Live telemetry of the path to an IP.** It shows which networks the traffic crosses, where each hop is, how far it can be, and what physics (the speed of light in fiber) says about it.
 
-> **Status: Phase 1 closed on 2026-09-29; the observation study is in its 24 h rehearsal.** This repository holds only structural material: code, scripts and templates that work on any network.
+> **Status: Phase 1 closed on 2026-09-29; the observation study is in its second 24 h rehearsal.** The first one passed and exposed two defects in batch mode, fixed on 2026-09-30. This repository holds only structural material: code, scripts and templates that work on any network.
 
 ## Layout
 
@@ -12,7 +12,7 @@ One folder per piece, in order. Only `01_engine/` is production code; `00_` and 
 |---|---|---|
 | `00_verification/` | Study: 48 h of real data and the verdict on whether to build | Closed 2026-09-28 |
 | `01_engine/` | Product: traces and judges every hop; grows into live telemetry | Phase 1 closed 2026-09-29; Phase 2 next |
-| `02_observation/` | Study: the engine running untouched for at least 14 days | 24 h rehearsal running |
+| `02_observation/` | Study: the engine running untouched for at least 14 days | Second 24 h rehearsal running |
 
 ## The engine (`01_engine/`)
 
@@ -24,7 +24,7 @@ One binary, `tracertip`, for Linux.
 | `lookup <ip>...` | Everything the bases and services say about addresses, without probing |
 | `update-db` | Downloads and verifies the local IP bases, each at its source's pace |
 | `targets` | Chooses and checks measurement targets: RIPE Atlas anchors, dual-stack, one BGP origin, outside the anycast census, and no faster than light from their declared place |
-| `batch` | Traces a target list on fixed UTC slots that alternate IPv4 and IPv6, one target at a time. It replaces failing targets from a reserve and writes data that survives a power cut |
+| `batch` | Traces a target list on fixed UTC slots that alternate IPv4 and IPv6, one target at a time. It replaces failing targets from a reserve, never blames a target for the host's own outages, and writes data that survives a power cut |
 
 `01_engine/deploy/` installs the binary with `CAP_NET_RAW` only, plus a daily, hardened update of the bases.
 
@@ -90,4 +90,4 @@ MIT. See `LICENSE`.
 
 ---
 
-*Updated: 2026-09-29 10:16 UTC.*
+*Updated: 2026-09-30 12:40 UTC.*

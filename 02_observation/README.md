@@ -41,6 +41,6 @@ tracertip batch -state /var/lib/tracertip/study -report   # facts per day
 
 Do not trace from the host by hand while the study runs: one target at a time is part of the method.
 
-**Status:** 24 h rehearsal running since 2026-09-29 10:30 UTC; the 14 days start only if it passes.
+**Status:** the first 24 h rehearsal (2026-09-29) passed and exposed two defects in batch mode: the host's own IPv6 outages counted as target failures, and one stale routing answer replaced a healthy target. Both are fixed, and an engine change means a rerun: the second rehearsal has been running since 2026-09-30 12:00 UTC. The 14 days start only if it passes.
 
-*Updated: 2026-09-29 10:16 UTC.*
+*Updated: 2026-09-30 12:40 UTC.*
