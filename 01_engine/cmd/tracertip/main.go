@@ -35,6 +35,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runTargets(args[1:], stdout, stderr)
 	case "batch":
 		return runBatch(args[1:], stdout, stderr)
+	case "serve":
+		return runServe(args[1:], stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, "tracertip", version())
 		return exitOK
@@ -56,6 +58,7 @@ commands:
   update-db download and verify the local IP bases
   targets   choose and check measurement targets (RIPE Atlas anchors)
   batch     trace a target list on fixed slots, alternating families, with a reserve
+  serve     probe up to 5 targets without end and keep their history (Linux, needs CAP_NET_RAW)
   version   print the version
   help      print this help
 `)
