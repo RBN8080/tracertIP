@@ -148,10 +148,52 @@ func TestTrace(t *testing.T) {
 			}
 		}
 	}
-	for i := 1; i < len(recs); i++ {
-		a, b := recs[i-1], recs[i]
-		if a.Round > b.Round || (a.Round == b.Round && a.TTL >= b.TTL) {
-			t.Fatalf("records out of order: (%d,%d) then (%d,%d)", a.Round, a.TTL, b.Round, b.TTL)
+	seen := map[[2]int]bool{}
+	for i, r := range recs {
+		if i > 0 && recs[i-1].Round > r.Round {
+			t.Fatalf("rounds interleaved: round %d after round %d", r.Round, recs[i-1].Round)
+		}
+		if k := [2]int{r.Round, r.TTL}; seen[k] {
+			t.Fatalf("round %d TTL %d emitted twice", r.Round, r.TTL)
+		} else {
+			seen[k] = true
+		}
+	}
+}
+
+// A reply goes out at once: it does not wait for its probe's timeout, nor
+// for a silent TTL before it in the same round. The silent one goes out when
+// its time is up, and no probe of the next round overtakes it.
+func TestTraceEmitsRepliesAtOnce(t *testing.T) {
+	target := netip.MustParseAddr("198.51.100.7")
+	net := newFakeNet(target, 4)
+	net.silent[2] = true
+	cfg := Config{Target: target, TTLMax: 6, Rounds: 2, Timeout: 300 * time.Millisecond,
+		RoundInterval: 100 * time.Millisecond, Spacing: time.Millisecond, ICMPID: 1, FlowID: 2}
+	type out struct {
+		p   model.Probe
+		lag time.Duration
+	}
+	var got []out
+	_, err := Trace(context.Background(), net, cfg, func(p model.Probe) error {
+		got = append(got, out{p, time.Since(p.SendWall)})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	silentSeen := map[int]bool{}
+	for _, o := range got {
+		switch {
+		case o.p.TTL == 2:
+			if o.lag < cfg.Timeout-5*time.Millisecond { // SendWall is wall time (UTC strips the monotonic reading)
+				t.Errorf("round %d: the silent TTL went out after %s, before its timeout", o.p.Round, o.lag)
+			}
+			silentSeen[o.p.Round] = true
+		case o.p.Round == 0 && o.lag > cfg.Timeout/2:
+			t.Errorf("round 0 TTL %d: reply went out %s after sending, want well before the %s timeout", o.p.TTL, o.lag, cfg.Timeout)
+		case o.p.Round == 1 && !silentSeen[0]:
+			t.Errorf("round 1 TTL %d went out before round 0's silent TTL", o.p.TTL)
 		}
 	}
 }
@@ -160,7 +202,8 @@ func TestTrace(t *testing.T) {
 func TestTraceContinuous(t *testing.T) {
 	target := netip.MustParseAddr("198.51.100.7")
 	net := newFakeNet(target, 2)
-	cfg := Config{Target: target, TTLMax: 10, Rounds: 0, Timeout: 5 * time.Millisecond,
+	// The timeout leaves the fake network's 3 ms reply room under -race on a busy machine.
+	cfg := Config{Target: target, TTLMax: 10, Rounds: 0, Timeout: 50 * time.Millisecond,
 		RoundInterval: time.Millisecond, Spacing: 0, ICMPID: 1, FlowID: 2}
 	ctx, cancel := context.WithCancel(context.Background())
 	last := -1

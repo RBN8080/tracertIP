@@ -101,6 +101,17 @@ func (m *Monitor) Health() Health {
 	return m.h
 }
 
+// complete says whether TTLs 1..last have all come in: a probe's reply can
+// overtake a silent TTL before it, so the highest TTL alone proves nothing.
+func complete(have map[int]bool, last int) bool {
+	for ttl := 1; ttl <= last; ttl++ {
+		if !have[ttl] {
+			return false
+		}
+	}
+	return true
+}
+
 // countLocked adds one probe to the health; false if it was never sent.
 func (m *Monitor) countLocked(status string) bool {
 	m.h.Probes++
@@ -188,8 +199,9 @@ func (m *Monitor) session(ctx context.Context) error {
 	var (
 		round  []model.Probe
 		cur    = -1
-		last   int  // highest TTL of the previous round: the round is complete when it arrives
+		last   int  // highest TTL of the previous round: the round is complete when 1..last are in
 		closed bool // cur was finished early; a straggler goes to disk only
+		have   = map[int]bool{}
 		dark   int
 		failed error
 		prev   time.Time // start of the previous round
@@ -233,6 +245,7 @@ func (m *Monitor) session(ctx context.Context) error {
 			last = max(last, p.TTL)
 		}
 		round = round[:0]
+		clear(have)
 	}
 	_, err = probe.Trace(sctx, conn, pc, func(p model.Probe) error {
 		if p.Round != cur {
@@ -248,8 +261,9 @@ func (m *Monitor) session(ctx context.Context) error {
 			return nil
 		}
 		round = append(round, p)
-		if last > 0 && p.TTL >= last {
-			finish() // without waiting a round interval for the next round's first probe
+		have[p.TTL] = true
+		if last > 0 && len(have) >= last && complete(have, last) {
+			finish() // without waiting for the next round's first probe
 			closed = true
 		}
 		return nil

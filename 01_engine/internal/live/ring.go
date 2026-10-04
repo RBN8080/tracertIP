@@ -6,6 +6,7 @@ package live
 
 import (
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
@@ -29,11 +30,14 @@ type Round struct {
 	Samples []Sample
 }
 
-// Summarize keeps, for each probe, the first reply that came in time.
+// Summarize keeps, for each probe, the first reply that came in time, in
+// TTL order; the round starts with its first probe sent.
 func Summarize(target netip.Addr, n int, probes []model.Probe) Round {
+	probes = slices.Clone(probes)
+	slices.SortFunc(probes, func(a, b model.Probe) int { return a.TTL - b.TTL })
 	r := Round{Target: target, N: n, Samples: make([]Sample, 0, len(probes))}
-	for i, p := range probes {
-		if i == 0 {
+	for _, p := range probes {
+		if !p.SendWall.IsZero() && (r.Start.IsZero() || p.SendWall.Before(r.Start)) {
 			r.Start = p.SendWall
 		}
 		s := Sample{TTL: p.TTL, RTTms: -1, Status: p.Status}

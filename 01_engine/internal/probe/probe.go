@@ -71,8 +71,13 @@ type pending struct {
 	sent time.Time // monotonic
 }
 
-// Trace probes cfg.Target and calls emit for each probe once it can no longer
-// get an on-time reply, in (round, TTL) order within each round.
+// Trace probes cfg.Target and calls emit for each probe as soon as it has an
+// on-time reply, or once it can no longer get one. Rounds never interleave:
+// no probe of a round comes out before every probe of the rounds before it,
+// but within a round a reply may overtake a TTL still waiting for its own.
+// In the second study rehearsal no probe drew more than one reply (613 514
+// probes, evidence 2_119), so emitting at the first loses nothing measured;
+// a later reply is counted in LateLost.
 func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error) (Summary, error) {
 	v6 := cfg.Target.Is6() && !cfg.Target.Is4In6()
 	if v6 && !cfg.Source.Is6() {
@@ -88,6 +93,7 @@ func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error
 
 	recvDone := make(chan struct{})
 	stop := make(chan struct{})
+	wake := make(chan struct{}, 1) // an on-time reply came in: its probe can go out
 	go func() {
 		defer close(recvDone)
 		buf := make([]byte, 65535)
@@ -128,6 +134,12 @@ func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error
 					QTTL: r.qTTL, QIPID: r.qIPID, QLen: r.qLen,
 					Raw: append([]byte(nil), r.icmp...),
 				})
+				if !late {
+					select {
+					case wake <- struct{}{}:
+					default:
+					}
+				}
 				if r.echo && r.from == cfg.Target && !late {
 					_, ttl := splitSeq(r.seq)
 					if !sum.Reached || ttl < sum.TargetTTL {
@@ -158,13 +170,31 @@ func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error
 		rec.Status, rec.Error = model.StatusSendError, err.Error()
 	}
 	var order []uint16
+	// done: the probe has an on-time reply or its time is up. Call with mu held.
+	done := func(p *pending, until time.Time, all bool) bool {
+		if all || p.sent.Add(cfg.Timeout).Before(until) {
+			return true
+		}
+		for _, r := range p.rec.Replies {
+			if !r.Late {
+				return true
+			}
+		}
+		return false
+	}
 	flush := func(until time.Time, all bool) error {
 		mu.Lock()
+		block := -1 // the oldest round with a probe still waiting: later rounds wait for it
+		for _, s := range order {
+			if p := inflight[s]; !done(p, until, all) && (block < 0 || p.rec.Round < block) {
+				block = p.rec.Round
+			}
+		}
 		var ready []*pending
 		keep := order[:0]
 		for _, s := range order {
 			p := inflight[s]
-			if all || p.sent.Add(cfg.Timeout).Before(until) {
+			if done(p, until, all) && (block < 0 || p.rec.Round <= block) {
 				ready = append(ready, p)
 				delete(inflight, s)
 			} else {
@@ -173,7 +203,10 @@ func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error
 		}
 		order = keep
 		mu.Unlock()
-		sort.SliceStable(ready, func(i, j int) bool { return ready[i].rec.SendMonoNS < ready[j].rec.SendMonoNS })
+		sort.SliceStable(ready, func(i, j int) bool {
+			a, b := ready[i].rec, ready[j].rec
+			return a.Round < b.Round || a.Round == b.Round && a.SendMonoNS < b.SendMonoNS
+		})
 		for _, p := range ready {
 			mu.Lock()
 			rec := p.rec
@@ -202,6 +235,35 @@ func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error
 			}
 		}
 		return nil
+	}
+
+	// pause waits d, handing on every probe that gets its reply or runs out of
+	// time meanwhile, the moment it does.
+	pause := func(d time.Duration) error {
+		end := time.Now().Add(d)
+		for {
+			wait := time.Until(end)
+			mu.Lock()
+			for _, s := range order {
+				wait = min(wait, time.Until(inflight[s].sent.Add(cfg.Timeout)))
+			}
+			mu.Unlock()
+			t := time.NewTimer(max(wait, 0))
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return ctx.Err()
+			case <-wake:
+			case <-t.C:
+			}
+			t.Stop()
+			if err := flush(time.Now(), false); err != nil {
+				return err
+			}
+			if !time.Now().Before(end) {
+				return nil
+			}
+		}
 	}
 
 	for round := 0; cfg.Rounds == 0 || round < cfg.Rounds; round++ {
@@ -233,39 +295,19 @@ func Trace(ctx context.Context, c Conn, cfg Config, emit func(model.Probe) error
 				sendErr(&p.rec, err)
 				mu.Unlock()
 			}
-			if err := sleep(ctx, cfg.Spacing); err != nil {
-				return result(err)
-			}
-			if err := flush(time.Now(), false); err != nil {
+			if err := pause(cfg.Spacing); err != nil {
 				return result(err)
 			}
 		}
 		if cfg.Rounds == 0 || round < cfg.Rounds-1 {
-			if err := sleep(ctx, time.Until(roundStart.Add(cfg.RoundInterval))); err != nil {
-				return result(err)
-			}
-			if err := flush(time.Now(), false); err != nil {
+			if err := pause(time.Until(roundStart.Add(cfg.RoundInterval))); err != nil {
 				return result(err)
 			}
 		}
 	}
 	// Wait for the last probes' timeout; late replies may still arrive.
-	if err := sleep(ctx, cfg.Timeout); err != nil {
+	if err := pause(cfg.Timeout); err != nil {
 		return result(err)
 	}
 	return result(flush(time.Now(), true))
-}
-
-func sleep(ctx context.Context, d time.Duration) error {
-	if d <= 0 {
-		return ctx.Err()
-	}
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
 }
