@@ -357,3 +357,26 @@ func TestStoreNeverReopensAClosedDay(t *testing.T) {
 		t.Errorf("open day = %v, want its record and the late one", got)
 	}
 }
+
+func TestWindowPerTTL(t *testing.T) {
+	a, b := netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.2.2")
+	var rounds []Round
+	for i := range 60 {
+		hop2 := Sample{TTL: 2, RTTms: -1}
+		if i%4 != 0 {
+			hop2 = Sample{TTL: 2, From: b, RTTms: 30 + float64(i%5)}
+		}
+		rounds = append(rounds, Round{N: i, Samples: []Sample{{TTL: 1, From: a, RTTms: 0.5}, hop2}})
+	}
+	w := Window(rounds)
+	if len(w) != 2 || w[0].TTL != 1 || w[0].Addr != "192.0.2.1" || w[0].Addrs != 1 || *w[0].LossPct != 0 {
+		t.Fatalf("hop 1: %+v", w)
+	}
+	h := w[1]
+	if h.Sent != 60 || h.Replied != 45 || *h.LossPct != 25 || h.MaxBurst != 1 || h.Addr != "192.0.2.2" {
+		t.Errorf("hop 2: %+v", h)
+	}
+	if h.P95MS != nil || h.P50MS == nil || *h.MinMS != 30 {
+		t.Errorf("hop 2 percentiles: p50 %v p95 %v min %v; want a median, no p95 from 45 RTTs, min 30", h.P50MS, h.P95MS, *h.MinMS)
+	}
+}
