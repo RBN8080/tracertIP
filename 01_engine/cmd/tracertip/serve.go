@@ -18,8 +18,10 @@ import (
 	"time"
 
 	"github.com/rbn8080/tracertip/01_engine/internal/batch"
+	"github.com/rbn8080/tracertip/01_engine/internal/enrich"
 	"github.com/rbn8080/tracertip/01_engine/internal/live"
 	"github.com/rbn8080/tracertip/01_engine/internal/probe"
+	"github.com/rbn8080/tracertip/01_engine/internal/route"
 )
 
 func runServe(args []string, stdout, stderr io.Writer) int {
@@ -69,18 +71,23 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "tracertip:", err)
 		return exitFail
 	}
+	analyzers := map[netip.Addr]*live.Analyzer{} // filled before any monitor runs
 	mcfg := live.Config{
 		Probe: probe.Defaults, Open: open, Source: probe.SourceFor, Store: store, Log: log,
-		Header: func(a netip.Addr, pc probe.Config) any { return startRecord(time.Now(), a, pc, basesDir) },
+		Header:  func(a netip.Addr, pc probe.Config) any { return startRecord(time.Now(), a, pc, basesDir) },
+		OnRound: func(r live.Round) { analyzers[r.Target].Feed(r) },
 	}
+	events := route.NewLog(eventLogSize)
+	resolve := asnResolver(basesDir)
 	monitors := make([]*live.Monitor, len(targetList))
 	for i, a := range targetList {
 		monitors[i] = live.NewMonitor(a, mcfg, random16(), random16())
+		analyzers[a] = live.NewAnalyzer(monitors[i], resolve, events, store, log)
 	}
 	fmt.Fprintf(stdout, "tracertip serve: %d targets, one round every %s each; history in %s (cap %.1f GiB); Ctrl-C stops\n",
 		len(monitors), probe.Defaults.RoundInterval, *dir, *capGB)
 
-	err = serve(ctx, monitors, probe.Defaults.RoundInterval, *every, *dir, log)
+	err = serve(ctx, monitors, analyzers, probe.Defaults.RoundInterval, *every, *dir, log)
 	if cerr := store.Close(); err == nil {
 		err = cerr
 	}
@@ -91,11 +98,37 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
+// eventLogSize is how many route events memory keeps for every target: at
+// the rehearsal's 74 records a day for 122 paths, weeks of them.
+const eventLogSize = 1000
+
+// asnResolver looks addresses up in the local AS bases only (no DNS, no
+// IPmap): IPtoASN, the source the hop records name first.
+func asnResolver(dir string) live.Resolver {
+	return func(ctx context.Context, addrs []netip.Addr) (map[netip.Addr]int, error) {
+		info, err := enrich.Enrich(ctx, addrs, enrich.Options{Dir: dir, NoDNS: true, NoIPmap: true, NoCity: true})
+		if err != nil {
+			return nil, err
+		}
+		out := map[netip.Addr]int{}
+		for a, inf := range info {
+			for _, x := range inf.AS {
+				if x.Source == "iptoasn" {
+					out[a] = x.ASN
+					break
+				}
+			}
+		}
+		return out, nil
+	}
+}
+
 // serve runs the monitors with their rounds staggered evenly over the round
-// interval, so the targets' probes do not leave together (00_IDEA 5), and
-// logs their health every so often. The first monitor that cannot write its
-// history stops them all.
-func serve(ctx context.Context, monitors []*live.Monitor, interval, every time.Duration, dir string, log *slog.Logger) error {
+// interval, so the targets' probes do not leave together (00_IDEA 5), runs
+// their analyzers, and logs their health every so often. The first that
+// cannot write its history or read the bases stops them all.
+func serve(ctx context.Context, monitors []*live.Monitor, analyzers map[netip.Addr]*live.Analyzer,
+	interval, every time.Duration, dir string, log *slog.Logger) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var (
@@ -103,16 +136,24 @@ func serve(ctx context.Context, monitors []*live.Monitor, interval, every time.D
 		mu   sync.Mutex
 		errs []error
 	)
+	fail := func(who netip.Addr, err error) {
+		mu.Lock()
+		errs = append(errs, fmt.Errorf("%s: %w", who, err))
+		mu.Unlock()
+		cancel()
+	}
 	for i, m := range monitors {
+		wg.Go(func() {
+			if err := analyzers[m.Target].Run(ctx); err != nil {
+				fail(m.Target, err)
+			}
+		})
 		wg.Go(func() {
 			if !wait(ctx, interval*time.Duration(i)/time.Duration(len(monitors))) {
 				return
 			}
 			if err := m.Run(ctx); err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Errorf("%s: %w", m.Target, err))
-				mu.Unlock()
-				cancel()
+				fail(m.Target, err)
 			}
 		})
 	}
@@ -122,21 +163,22 @@ func serve(ctx context.Context, monitors []*live.Monitor, interval, every time.D
 		select {
 		case <-ctx.Done():
 		case <-t.C:
-			logHealth(log, monitors, dir)
+			logHealth(log, monitors, analyzers, dir)
 		}
 	}
 	wg.Wait()
 	return errors.Join(errs...)
 }
 
-func logHealth(log *slog.Logger, monitors []*live.Monitor, dir string) {
+func logHealth(log *slog.Logger, monitors []*live.Monitor, analyzers map[netip.Addr]*live.Analyzer, dir string) {
 	tempC, freeMB := batch.Health(dir)
 	log.Info("node", "clock_synced", batch.ClockSynced(), "temp_c", tempC, "disk_free_mb", freeMB)
 	for _, m := range monitors {
 		h := m.Health()
 		log.Info("target", "target", h.Target, "state", h.State, "rounds", h.Rounds, "replied", h.Replied,
 			"no_reply", h.NoReply, "send_errors", h.SendErrors, "sessions", h.Sessions,
-			"lag_ms", fmt.Sprintf("%.0f", h.LagMS), "max_lag_ms", fmt.Sprintf("%.0f", h.MaxLagMS), "err", h.Error)
+			"lag_ms", fmt.Sprintf("%.0f", h.LagMS), "max_lag_ms", fmt.Sprintf("%.0f", h.MaxLagMS),
+			"path", analyzers[m.Target].Path(), "unanalyzed", analyzers[m.Target].Dropped(), "err", h.Error)
 	}
 }
 

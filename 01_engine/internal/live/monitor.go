@@ -91,6 +91,9 @@ func NewMonitor(target netip.Addr, cfg Config, icmpID, flowID uint16) *Monitor {
 		h: Health{Target: target.String(), State: StateMeasuring}}
 }
 
+// Header is the record that opens the target's files.
+func (m *Monitor) Header() any { return m.cfg.Header(m.Target, m.pc) }
+
 // Health returns a copy of the monitor's health.
 func (m *Monitor) Health() Health {
 	m.mu.Lock()

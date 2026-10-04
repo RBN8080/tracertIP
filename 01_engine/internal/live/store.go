@@ -86,6 +86,9 @@ func (s *Store) Write(target netip.Addr, now time.Time, header func() any, recs 
 	}
 	day := now.UTC().Format(time.DateOnly)
 	df := s.files[target]
+	if df != nil && day < df.day {
+		day = df.day // never back to a closed day: its .gz would be rewritten
+	}
 	if df != nil && df.day != day {
 		if err := s.closeDay(target, df); err != nil {
 			return err

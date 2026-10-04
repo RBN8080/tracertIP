@@ -20,6 +20,7 @@ import (
 
 	"github.com/rbn8080/tracertip/01_engine/internal/model"
 	"github.com/rbn8080/tracertip/01_engine/internal/probe"
+	"github.com/rbn8080/tracertip/01_engine/internal/route"
 )
 
 func TestRingKeepsNewest(t *testing.T) {
@@ -272,5 +273,87 @@ func TestMonitorRecoversFromNodeOutage(t *testing.T) {
 	}
 	if h := m.Health(); h.State != StateMeasuring || h.Replied == 0 || h.Sessions < 2 {
 		t.Errorf("after the outage: %+v", h)
+	}
+}
+
+// The analyzer asks the bases once per new address, turns a change of
+// transit into a provisional and a confirmed event, and writes them to
+// memory and to the target's history.
+func TestAnalyzerEvents(t *testing.T) {
+	var down atomic.Bool
+	var opened atomic.Int32
+	cfg := testConfig(t, &down, &opened)
+	tgt := netip.MustParseAddr("192.0.2.99")
+	m := NewMonitor(tgt, cfg, 1, 2)
+	hopA, hopB := netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.0.2.20")
+	asns := map[netip.Addr]int{hopA: 64500, hopB: 64501, tgt: 64510}
+	var asked atomic.Int32
+	resolve := func(_ context.Context, addrs []netip.Addr) (map[netip.Addr]int, error) {
+		asked.Add(int32(len(addrs)))
+		out := map[netip.Addr]int{}
+		for _, a := range addrs {
+			out[a] = asns[a]
+		}
+		return out, nil
+	}
+	log := route.NewLog(10)
+	a := NewAnalyzer(m, resolve, log, cfg.Store, cfg.Log)
+	at := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	for n, hop := range []netip.Addr{hopA, hopA, hopA, hopB, hopB, hopB} {
+		a.Feed(Round{Target: tgt, N: n, Start: at.Add(time.Duration(n) * 2 * time.Second), Samples: []Sample{
+			{TTL: 1, From: hop, RTTms: 1}, {TTL: 2, From: tgt, RTTms: 50}}})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(log.Last(10)) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	evs := log.Last(10)
+	if len(evs) != 2 || evs[0].State != model.StateProvisional || evs[1].State != model.StateConfirmed {
+		t.Fatalf("events %+v", evs)
+	}
+	if got := asked.Load(); got != 3 {
+		t.Errorf("resolver asked for %d addresses, want 3 (each once)", got)
+	}
+	if p := a.Path(); !slices.Equal(p, []int{64501, 64510}) {
+		t.Errorf("path %v", p)
+	}
+	cfg.Store.Close()
+	b, _ := os.ReadFile(filepath.Join(cfg.Store.dir, TargetDir(tgt), time.Now().UTC().Format(time.DateOnly)+".jsonl"))
+	if n := strings.Count(string(b), `"type":"event"`); n != 2 || !strings.HasPrefix(string(b), `{"v":1,"type":"start"`) {
+		t.Errorf("history %q", b)
+	}
+}
+
+// A record that arrives late for a day already closed goes to the open day:
+// rewriting the closed day's file would replace its compressed copy.
+func TestStoreNeverReopensAClosedDay(t *testing.T) {
+	dir := t.TempDir()
+	a := netip.MustParseAddr("192.0.2.1")
+	d2 := time.Date(2026, 10, 2, 0, 0, 1, 0, time.UTC)
+	s, err := OpenStore(dir, DefaultCap, d2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, at := range []time.Time{d2.Add(-2 * time.Second), d2, d2.Add(-time.Second)} {
+		if err := s.Write(a, at, nil, map[string]string{"at": at.Format(time.TimeOnly)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	td := filepath.Join(dir, TargetDir(a))
+	if got := lines(t, filepath.Join(td, "2026-10-01.jsonl.gz")); len(got) != 1 {
+		t.Errorf("closed day = %v, want only its own record", got)
+	}
+	if got := lines(t, filepath.Join(td, "2026-10-02.jsonl")); len(got) != 2 {
+		t.Errorf("open day = %v, want its record and the late one", got)
 	}
 }
