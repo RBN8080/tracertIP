@@ -101,6 +101,27 @@ func (m *Monitor) Health() Health {
 	return m.h
 }
 
+// countLocked adds one probe to the health; false if it was never sent.
+func (m *Monitor) countLocked(status string) bool {
+	m.h.Probes++
+	switch status {
+	case model.StatusReply:
+		m.h.Replied++
+	case model.StatusNoReply:
+		m.h.NoReply++
+	case model.StatusSendError:
+		m.h.SendErrors++
+		return false
+	}
+	return true
+}
+
+func (m *Monitor) count(status string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.countLocked(status)
+}
+
 // Run measures in sessions until ctx ends. A session ends when the node
 // cannot measure; the next one starts after RestartWait.
 func (m *Monitor) Run(ctx context.Context) error {
@@ -167,6 +188,8 @@ func (m *Monitor) session(ctx context.Context) error {
 	var (
 		round  []model.Probe
 		cur    = -1
+		last   int  // highest TTL of the previous round: the round is complete when it arrives
+		closed bool // cur was finished early; a straggler goes to disk only
 		dark   int
 		failed error
 		prev   time.Time // start of the previous round
@@ -181,17 +204,9 @@ func (m *Monitor) session(ctx context.Context) error {
 		m.mu.Lock()
 		m.h.Rounds++
 		for _, s := range r.Samples {
-			m.h.Probes++
-			switch s.Status {
-			case model.StatusReply:
-				m.h.Replied++
-			case model.StatusNoReply:
-				m.h.NoReply++
-			case model.StatusSendError:
-				m.h.SendErrors++
-				continue
+			if m.countLocked(s.Status) {
+				sent++
 			}
-			sent++
 		}
 		m.h.LastRound = r.Start
 		if !prev.IsZero() {
@@ -213,17 +228,29 @@ func (m *Monitor) session(ctx context.Context) error {
 			m.setState(StateDark, fmt.Errorf("%d rounds in a row with no probe sent", dark))
 			cancel()
 		}
+		last = 0
+		for _, p := range round {
+			last = max(last, p.TTL)
+		}
 		round = round[:0]
 	}
 	_, err = probe.Trace(sctx, conn, pc, func(p model.Probe) error {
 		if p.Round != cur {
 			finish()
-			cur = p.Round
+			cur, closed = p.Round, false
 		}
-		round = append(round, p)
 		if err := m.cfg.Store.Write(pc.Target, time.Now(), header, p); err != nil {
 			failed = &storeError{err}
 			return failed
+		}
+		if closed { // the path grew longer than last round's: rare, and the next round has it
+			m.count(p.Status)
+			return nil
+		}
+		round = append(round, p)
+		if last > 0 && p.TTL >= last {
+			finish() // without waiting a round interval for the next round's first probe
+			closed = true
 		}
 		return nil
 	})
