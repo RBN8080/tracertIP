@@ -21,3 +21,12 @@ func Health(dir string) (tempC float64, freeMB int64) {
 	}
 	return tempC, freeMB
 }
+
+// RSSMB is this process's resident memory (MB), from /proc; zero if unknown.
+func RSSMB() int64 {
+	b, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return 0
+	}
+	return vmRSSMB(string(b))
+}

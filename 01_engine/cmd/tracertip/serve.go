@@ -116,7 +116,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 			Targets: targets, Events: events, Hops: j.hops, Home: asns.home(cfg.AccessASN), AccessASN: cfg.AccessASN, Hub: api.NewHub(),
 			Node: func() api.Node {
 				t, free := batch.Health(*dir)
-				return api.Node{Version: version(), ClockSynced: batch.ClockSynced(), TempC: t, DiskFreeMB: free}
+				return api.Node{Version: version(), ClockSynced: batch.ClockSynced(), TempC: t, DiskFreeMB: free, RSSMB: batch.RSSMB()}
 			},
 		})
 		events.OnAdd(srv.PublishEvents)
@@ -238,7 +238,7 @@ func serve(ctx context.Context, monitors []*live.Monitor, analyzers map[netip.Ad
 
 func logHealth(log *slog.Logger, monitors []*live.Monitor, analyzers map[netip.Addr]*live.Analyzer, dir string) {
 	tempC, freeMB := batch.Health(dir)
-	log.Info("node", "clock_synced", batch.ClockSynced(), "temp_c", tempC, "disk_free_mb", freeMB)
+	log.Info("node", "clock_synced", batch.ClockSynced(), "temp_c", tempC, "disk_free_mb", freeMB, "rss_mb", batch.RSSMB())
 	for _, m := range monitors {
 		h := m.Health()
 		log.Info("target", "target", h.Target, "state", h.State, "rounds", h.Rounds, "replied", h.Replied,

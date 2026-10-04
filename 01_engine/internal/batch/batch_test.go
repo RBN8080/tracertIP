@@ -201,3 +201,14 @@ func TestRoutingNeedsTwoChecks(t *testing.T) {
 		t.Errorf("after two failed checks in a row: %+v, active %+v", r, s.Active)
 	}
 }
+
+func TestVmRSSMB(t *testing.T) {
+	for in, want := range map[string]int64{
+		"Name:\ttracertip\nVmHWM:\t   98304 kB\nVmRSS:\t   21568 kB\n": 21,
+		"VmRSS:\n": 0, "Name:\tx\n": 0, "VmRSS:\t abc kB\n": 0,
+	} {
+		if got := vmRSSMB(in); got != want {
+			t.Errorf("vmRSSMB(%q) = %d, want %d", in, got, want)
+		}
+	}
+}

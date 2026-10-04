@@ -201,7 +201,8 @@ function drawEvents() {
 function drawHealth(hv) {
   const n = hv.node || {};
   $("node").textContent = `node ${n.version || "?"} · clock ${n.clock_synced ? "synced" : "NOT synced"}` +
-    (n.temp_c ? ` · ${n.temp_c.toFixed(1)} °C` : "") + (n.disk_free_mb ? ` · ${(n.disk_free_mb / 1024).toFixed(0)} GiB free` : "");
+    (n.temp_c ? ` · ${n.temp_c.toFixed(1)} °C` : "") + (n.disk_free_mb ? ` · ${(n.disk_free_mb / 1024).toFixed(0)} GiB free` : "") +
+    (n.rss_mb ? ` · ${n.rss_mb} MB in memory` : "");
   const tb = $("health").tBodies[0];
   tb.replaceChildren();
   for (const t of hv.targets || []) {

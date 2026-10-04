@@ -46,6 +46,7 @@ type Node struct {
 	ClockSynced bool    `json:"clock_synced"`
 	TempC       float64 `json:"temp_c,omitempty"`
 	DiskFreeMB  int64   `json:"disk_free_mb,omitempty"`
+	RSSMB       int64   `json:"rss_mb,omitempty"` // the service's resident memory
 }
 
 // Config wires the server to the running engine.
