@@ -15,6 +15,9 @@
     },
     {
       "$ref": "#/$defs/end"
+    },
+    {
+      "$ref": "#/$defs/event"
     }
   ],
   "$defs": {
@@ -294,6 +297,80 @@
         }
       },
       "additionalProperties": true
+    },
+    "event": {
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "time",
+        "target",
+        "kind",
+        "state",
+        "id",
+        "round",
+        "ttl",
+        "before_as",
+        "after_as"
+      ],
+      "description": "Derived record of continuous mode: a change in a target's AS path that is more than a hop not answering. Records of one change share id; recomputable from probe records.",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "event"
+        },
+        "time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "target": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "route_change"
+          ]
+        },
+        "state": {
+          "enum": [
+            "provisional",
+            "confirmed",
+            "dropped"
+          ]
+        },
+        "id": {
+          "type": "integer"
+        },
+        "round": {
+          "type": "integer"
+        },
+        "ttl": {
+          "type": "integer",
+          "description": "First TTL whose AS differs."
+        },
+        "before_as": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "after_as": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "rtt_before_ms": {
+          "type": "number",
+          "description": "Target's minimum RTT in the window before; absent: not measured, never 0."
+        },
+        "rtt_after_ms": {
+          "type": "number",
+          "description": "Target's minimum RTT in the window after; absent: not measured, never 0."
+        }
+      }
     }
   }
 }

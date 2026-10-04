@@ -26,7 +26,7 @@ func TestSchemaMatchesTypes(t *testing.T) {
 	}
 	for def, typ := range map[string]any{
 		"start": Start{}, "params": Params{}, "base": Base{},
-		"probe": Probe{}, "reply": Reply{}, "end": End{},
+		"probe": Probe{}, "reply": Reply{}, "end": End{}, "event": Event{},
 	} {
 		want := keys(s.Defs[def].Properties)
 		got := jsonNames(reflect.TypeOf(typ))
@@ -53,6 +53,34 @@ func TestProbeRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(in, out) {
 		t.Errorf("round trip changed the record:\n in %+v\nout %+v", in, out)
+	}
+}
+
+// An RTT that was not measured is absent, never 0 (P5).
+func TestEventUnmeasuredRTT(t *testing.T) {
+	rtt := 97.4
+	for _, tc := range []struct {
+		name   string
+		before *float64
+		want   string
+	}{
+		{"measured", &rtt, `"rtt_before_ms":97.4`},
+		{"not measured", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := json.Marshal(Event{V: SchemaVersion, Type: TypeEvent, Kind: EventRouteChange, State: StateProvisional,
+				Before: []int{64500, 64501}, After: []int{64500, 64502}, RTTBeforeMS: tc.before})
+			if err != nil {
+				t.Fatal(err)
+			}
+			has := strings.Contains(string(b), "rtt_before_ms")
+			if tc.want == "" && has || tc.want != "" && !strings.Contains(string(b), tc.want) {
+				t.Errorf("got %s", b)
+			}
+			if strings.Contains(string(b), "rtt_after_ms") {
+				t.Errorf("unmeasured rtt_after_ms written: %s", b)
+			}
+		})
 	}
 }
 

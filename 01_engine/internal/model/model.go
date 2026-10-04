@@ -15,6 +15,16 @@ const (
 	TypeStart = "start"
 	TypeProbe = "probe"
 	TypeEnd   = "end"
+	TypeEvent = "event"
+)
+
+// Event kinds and states. A change is provisional in the round that first
+// shows it, and confirmed or dropped once the next rounds agree or not.
+const (
+	EventRouteChange = "route_change"
+	StateProvisional = "provisional"
+	StateConfirmed   = "confirmed"
+	StateDropped     = "dropped" // the old path came back before confirmation
 )
 
 // Probe status values. A probe without a reply is a gap, never a 0 ms RTT.
@@ -100,4 +110,24 @@ type End struct {
 	Probes     int       `json:"probes"`
 	NoReply    int       `json:"no_reply"`
 	DurationMS int64     `json:"duration_ms"`
+}
+
+// Event is a derived record of continuous mode: a change in a target's AS
+// path that is more than a hop not answering. Records of one change share ID.
+// The RTTs are the target's minimum over the windows before and after; nil
+// means not measured, never 0.
+type Event struct {
+	V           int       `json:"v"`
+	Type        string    `json:"type"`
+	Time        time.Time `json:"time"`
+	Target      string    `json:"target"`
+	Kind        string    `json:"kind"`
+	State       string    `json:"state"`
+	ID          int64     `json:"id"`
+	Round       int       `json:"round"`
+	TTL         int       `json:"ttl"` // first TTL whose AS differs
+	Before      []int     `json:"before_as"`
+	After       []int     `json:"after_as"`
+	RTTBeforeMS *float64  `json:"rtt_before_ms,omitempty"`
+	RTTAfterMS  *float64  `json:"rtt_after_ms,omitempty"`
 }
