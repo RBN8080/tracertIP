@@ -180,9 +180,17 @@ func minPtr(m *float64, x float64) *float64 {
 
 // Log keeps the newest events in fixed memory, for every target.
 type Log struct {
-	mu  sync.Mutex
-	buf []model.Event
-	max int
+	mu     sync.Mutex
+	buf    []model.Event
+	max    int
+	notify func([]model.Event)
+}
+
+// OnAdd sets f to see every batch of events as it is added.
+func (l *Log) OnAdd(f func([]model.Event)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.notify = f
 }
 
 // NewLog keeps up to n events.
@@ -191,10 +199,14 @@ func NewLog(n int) *Log { return &Log{max: n} }
 // Add appends events, dropping the oldest beyond the limit.
 func (l *Log) Add(evs ...model.Event) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.buf = append(l.buf, evs...)
 	if over := len(l.buf) - l.max; over > 0 {
 		l.buf = slices.Delete(l.buf, 0, over)
+	}
+	f := l.notify
+	l.mu.Unlock()
+	if f != nil {
+		f(evs)
 	}
 }
 

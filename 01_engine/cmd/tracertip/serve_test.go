@@ -1,15 +1,22 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"context"
+	"io"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/rbn8080/tracertip/01_engine/internal/enrich"
 	"github.com/rbn8080/tracertip/01_engine/internal/live"
+	"github.com/rbn8080/tracertip/01_engine/internal/output"
 	"github.com/rbn8080/tracertip/01_engine/internal/probe"
 )
 
@@ -79,6 +86,115 @@ func TestServeRuns(t *testing.T) {
 		}
 		if !strings.Contains(errs.String(), "target="+a) {
 			t.Errorf("no health line for %s in %q", a, errs.String())
+		}
+	}
+}
+
+// syncBuffer lets a test read what serve prints while it runs.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// The terminal says where the live API is; the API answers, the stream
+// carries rounds, and an address outside the LAN is refused.
+func TestServeLiveAPI(t *testing.T) {
+	defer func(o func(netip.Addr) (probe.Conn, error), d probe.Config) { open, probe.Defaults = o, d }(open, probe.Defaults)
+	probe.Defaults.TTLMax, probe.Defaults.Timeout = 3, 30*time.Millisecond
+	probe.Defaults.RoundInterval, probe.Defaults.Spacing = 40*time.Millisecond, time.Millisecond
+	open = func(a netip.Addr) (probe.Conn, error) {
+		return &fakePath{target: a, mode: "up", replies: make(chan []byte, 64)}, nil
+	}
+	dir := t.TempDir()
+	list := filepath.Join(dir, "targets.txt")
+	os.WriteFile(list, []byte("192.0.2.1\n"), 0o644)
+	cfg := filepath.Join(dir, "config.json")
+	os.WriteFile(cfg, []byte("{}"), 0o644)
+	args := []string{"serve", "-targets", list, "-state", filepath.Join(dir, "live"), "-config", cfg, "-for", "3s"}
+
+	var errs bytes.Buffer
+	if code := run(append(args, "-listen", "0.0.0.0:0"), io.Discard, &errs); code != exitUsage || !strings.Contains(errs.String(), "LAN only") {
+		t.Errorf("listen on all interfaces: exit %d, %q", code, errs.String())
+	}
+
+	var out syncBuffer
+	done := make(chan int, 1)
+	go func() { done <- run(append(args, "-listen", "127.0.0.1:0"), &out, io.Discard) }()
+	var base string
+	for deadline := time.Now().Add(2 * time.Second); base == "" && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if _, rest, ok := strings.Cut(out.String(), "live API on "); ok {
+			base, _, _ = strings.Cut(rest, " ")
+		}
+	}
+	if base == "" {
+		t.Fatalf("no API address printed: %q", out.String())
+	}
+	resp, err := http.Get(base + "stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := bufio.NewScanner(resp.Body)
+	got := false
+	for sc.Scan() {
+		if strings.Contains(sc.Text(), `"type":"round"`) && strings.Contains(sc.Text(), "192.0.2.1") {
+			got = true
+			break
+		}
+	}
+	resp.Body.Close()
+	if !got {
+		t.Error("no round of 192.0.2.1 on the stream")
+	}
+	r, err := http.Get(base + "targets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(r.Body)
+	r.Body.Close()
+	if !strings.Contains(string(b), `"target":"192.0.2.1"`) {
+		t.Errorf("targets: %s", b)
+	}
+	if code := <-done; code != exitOK {
+		t.Errorf("serve exit %d", code)
+	}
+}
+
+// The API judges recent rounds like trace: one record per TTL up to the
+// target, and in public form the home router keeps only its TTL and RTT.
+func TestHopJudgeFromRounds(t *testing.T) {
+	tgt := netip.MustParseAddr("192.0.2.9")
+	home := netip.MustParsePrefix("192.168.0.0/16").Addr().Next()
+	var rounds []live.Round
+	for n := range 3 {
+		rounds = append(rounds, live.Round{Target: tgt, N: n, Samples: []live.Sample{
+			{TTL: 1, From: home, RTTms: 0.5, Status: "reply"}, {TTL: 2, RTTms: -1, Status: "no_reply"},
+			{TTL: 3, From: tgt, RTTms: 50 + float64(n), Status: "reply"}}})
+	}
+	j := &hopJudge{opts: enrich.Options{Dir: t.TempDir(), NoDNS: true, NoIPmap: true, NoCity: true}, known: map[netip.Addr]enrich.Info{}}
+	for _, public := range []bool{false, true} {
+		got, err := j.hops(context.Background(), tgt, rounds, public)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recs := got.([]output.HopRecord)
+		// Documentation addresses are special-purpose, so public form hides the target too.
+		if len(recs) != 3 || !public && recs[2].Addr != tgt.String() || recs[2].MinRTT != 50 || recs[1].MinRTT >= 0 || recs[1].Sent != 3 {
+			t.Fatalf("public=%t records %+v", public, recs)
+		}
+		if public && (!recs[0].Home || recs[0].Addr != "") || !public && recs[0].Addr != home.String() {
+			t.Errorf("public=%t home hop %+v", public, recs[0])
 		}
 	}
 }
