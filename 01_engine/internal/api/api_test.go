@@ -204,3 +204,46 @@ viewers:
 		t.Errorf("viewer %d got %d, want 503", MaxStreams+1, r.StatusCode)
 	}
 }
+
+// The live view comes from the binary, with its own scripts only.
+func TestUIServed(t *testing.T) {
+	_, ts := testServer(t)
+	code, body, h := get(t, ts.URL+"/")
+	if code != 200 || !strings.Contains(body, `<script src="app.js"`) || strings.Contains(body, "<script>") {
+		t.Errorf("GET / = %d: %.200s", code, body)
+	}
+	if h.Get("Content-Security-Policy") != "default-src 'self'" {
+		t.Errorf("CSP %q", h.Get("Content-Security-Policy"))
+	}
+	for _, f := range []string{"/app.js", "/app.css"} {
+		if code, body, _ := get(t, ts.URL+f); code != 200 || len(body) < 100 {
+			t.Errorf("GET %s = %d (%d bytes)", f, code, len(body))
+		}
+	}
+	if code, _, _ := get(t, ts.URL+"/../go.mod"); code == 200 {
+		t.Error("files outside the view are served")
+	}
+}
+
+// Empty answers are JSON arrays, and without the access ISP's AS a public
+// view is refused rather than shown with the ISP's routers in it.
+func TestEmptyAndRefusedPublic(t *testing.T) {
+	m := live.NewMonitor(tgt, live.Config{}, 1, 2)
+	s := New(Config{Targets: []Target{{Monitor: m, Path: func() []int { return nil }}}, Events: route.NewLog(5), Hub: NewHub(),
+		Node: func() Node { return Node{} }, Home: func(netip.Addr) bool { return true }})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	for path, want := range map[string]string{"/v1/events": "[]", "/v1/targets/192.0.2.99/rounds": "[]", "/v1/targets/192.0.2.99/window": "[]"} {
+		if _, body, _ := get(t, ts.URL+path); strings.TrimSpace(body) != want {
+			t.Errorf("%s = %q, want %s", path, body, want)
+		}
+	}
+	if _, body, _ := get(t, ts.URL+"/v1/targets"); !strings.Contains(body, `"path":[]`) {
+		t.Errorf("targets before any path: %s", body)
+	}
+	for _, path := range []string{"/v1/targets?public=1", "/v1/stream?public=1", "/v1/events?public=1"} {
+		if code, body, _ := get(t, ts.URL+path); code != http.StatusServiceUnavailable || !strings.Contains(body, "access_asn") {
+			t.Errorf("%s = %d %q, want 503 naming access_asn", path, code, body)
+		}
+	}
+}

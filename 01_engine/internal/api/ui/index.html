@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tracertIP live</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>tracertIP <span class="sub">live</span></h1>
+  <p id="node" class="muted" aria-live="polite">connecting…</p>
+  <label class="toggle"><input type="checkbox" id="public"> public view (home side hidden)</label>
+</header>
+<main>
+  <nav aria-label="Targets"><ul id="targets"></ul></nav>
+
+  <section aria-labelledby="h-path">
+    <h2 id="h-path">Path <span id="latency" class="muted"></span></h2>
+    <div class="scroll"><table id="hops">
+      <thead><tr><th scope="col">TTL</th><th scope="col">Address</th><th scope="col">Network</th>
+        <th scope="col">Location</th><th scope="col" class="num">Min RTT</th><th scope="col">Flags</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section aria-labelledby="h-heat">
+    <h2 id="h-heat">RTT by hop over time</h2>
+    <canvas id="heat" height="260" role="img" aria-label="Heat map of RTT per hop over the last rounds"></canvas>
+    <p class="legend muted"><span class="swatch gap"></span> no reply · color: RTT from 1 ms (dark) to 400 ms or more (bright), log scale · newest on the right</p>
+  </section>
+
+  <section aria-labelledby="h-rtt">
+    <h2 id="h-rtt">Target RTT</h2>
+    <canvas id="rtt" height="180" role="img" aria-label="RTT to the target over the last rounds; route changes marked"></canvas>
+    <p id="summary" class="muted"></p>
+  </section>
+
+  <section aria-labelledby="h-events">
+    <h2 id="h-events">Route changes</h2>
+    <ol id="events" aria-live="polite"></ol>
+  </section>
+
+  <section aria-labelledby="h-health">
+    <h2 id="h-health">Instrument health</h2>
+    <div class="scroll"><table id="health">
+      <thead><tr><th scope="col">Target</th><th scope="col">State</th><th scope="col" class="num">Rounds</th>
+        <th scope="col" class="num">Replied</th><th scope="col" class="num">No reply</th><th scope="col" class="num">Not sent</th>
+        <th scope="col" class="num">Sessions</th><th scope="col" class="num">Lag</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section aria-labelledby="h-rules">
+    <h2 id="h-rules">Reading rules</h2>
+    <ol class="rules">
+      <li><b>R1</b> Loss only at an intermediate hop with a healthy target is that router's ICMP limit, not real loss.</li>
+      <li><b>R2</b> A high RTT at a hop that does not persist in the next ones is a slow router or a different return path, not the bottleneck.</li>
+      <li><b>R3</b> An increase that holds to the end is where the real cost is.</li>
+      <li><b>R4</b> Router name against physics: physics wins.</li>
+      <li><b>R5</b> A hop that does not answer is a gap; the path is not broken.</li>
+      <li><b>R6</b> Anycast never measures the distance to a continent.</li>
+    </ol>
+    <p class="muted">Locations are inferences; the return path is not visible from one vantage point.</p>
+  </section>
+</main>
+</body>
+</html>

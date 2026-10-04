@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/netip"
@@ -23,6 +25,14 @@ const (
 	healthEvery   = 10 * time.Second // health on the stream
 	requestWait   = 10 * time.Second // judging may wait for names and IPmap
 )
+
+// The live view is built into the binary (00_IDEA 5: go:embed): HTML,
+// CSS and JavaScript of our own, drawing on Canvas, nothing from elsewhere.
+//
+//go:embed ui
+var embedded embed.FS
+
+var uiFiles, _ = fs.Sub(embedded, "ui")
 
 // Target is one monitored target as the server sees it.
 type Target struct {
@@ -88,14 +98,17 @@ func CheckListen(addr string) error {
 // Handler routes /v1. Every route is GET; anything else is 405.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	quick := func(h http.HandlerFunc) http.Handler { return http.TimeoutHandler(h, requestWait, "timeout\n") }
+	quick := func(h http.HandlerFunc) http.Handler {
+		return http.TimeoutHandler(s.guard(h), requestWait, "timeout\n")
+	}
 	mux.Handle("GET /v1/health", quick(s.health))
 	mux.Handle("GET /v1/targets", quick(s.targetList))
 	mux.Handle("GET /v1/targets/{addr}/window", quick(s.window))
 	mux.Handle("GET /v1/targets/{addr}/rounds", quick(s.rounds))
 	mux.Handle("GET /v1/targets/{addr}/hops", quick(s.hops))
 	mux.Handle("GET /v1/events", quick(s.events))
-	mux.HandleFunc("GET /v1/stream", s.stream) // long-lived: no timeout handler, it would break flushing
+	mux.Handle("GET /v1/stream", s.guard(s.stream)) // long-lived: no timeout handler, it would break flushing
+	mux.Handle("GET /", http.FileServerFS(uiFiles))
 	return headers(mux)
 }
 
@@ -117,6 +130,30 @@ func headers(h http.Handler) http.Handler {
 }
 
 func public(r *http.Request) bool { return r.URL.Query().Get("public") == "1" }
+
+// errNoAccessASN: without the access ISP's AS the server cannot tell its
+// routers apart, so a public view would show them. It is refused instead
+// of degraded (P5).
+const errNoAccessASN = "public view needs access_asn in the configuration"
+
+// guard refuses a public request the server cannot honour.
+func (s *Server) guard(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if public(r) && s.cfg.AccessASN == 0 {
+			fail(w, http.StatusServiceUnavailable, errNoAccessASN)
+			return
+		}
+		h(w, r)
+	}
+}
+
+// list keeps an empty answer a JSON array, never null.
+func list[T any](xs []T) []T {
+	if xs == nil {
+		return []T{}
+	}
+	return xs
+}
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -171,7 +208,7 @@ type healthView struct {
 }
 
 func (s *Server) healthNow() healthView {
-	v := healthView{Node: s.cfg.Node()}
+	v := healthView{Node: s.cfg.Node(), Targets: []live.Health{}}
 	for _, t := range s.cfg.Targets {
 		v.Targets = append(v.Targets, t.Monitor.Health())
 	}
@@ -191,15 +228,16 @@ func (s *Server) targetList(w http.ResponseWriter, r *http.Request) {
 	pub := public(r)
 	var out []targetView
 	for _, t := range s.cfg.Targets {
-		v := targetView{Target: t.Monitor.Target.String(), State: t.Monitor.Health().State, Path: s.path(t.Path(), pub)}
+		v := targetView{Target: t.Monitor.Target.String(), State: t.Monitor.Health().State, Path: list(s.path(t.Path(), pub))}
 		for _, h := range live.Window(t.Monitor.Ring.Last(DefaultRounds)) {
-			if h.Addr == v.Target {
+			if h.Addr == v.Target { // the first TTL that reaches it: its distance
 				v.Last = &h
+				break
 			}
 		}
 		out = append(out, v)
 	}
-	writeJSON(w, out)
+	writeJSON(w, list(out))
 }
 
 func (s *Server) window(w http.ResponseWriter, r *http.Request) {
@@ -219,7 +257,7 @@ func (s *Server) window(w http.ResponseWriter, r *http.Request) {
 			win[i].Addr = s.addr(a, pub)
 		}
 	}
-	writeJSON(w, win)
+	writeJSON(w, list(win))
 }
 
 // roundView is a round as the stream and /rounds send it.
@@ -263,7 +301,7 @@ func (s *Server) rounds(w http.ResponseWriter, r *http.Request) {
 	for _, x := range t.Monitor.Ring.Last(n) {
 		out = append(out, s.roundView(x, pub))
 	}
-	writeJSON(w, out)
+	writeJSON(w, list(out))
 }
 
 func (s *Server) hops(w http.ResponseWriter, r *http.Request) {
@@ -300,7 +338,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	for i := range evs {
 		evs[i] = s.eventView(evs[i], pub)
 	}
-	writeJSON(w, evs)
+	writeJSON(w, list(evs))
 }
 
 // sse frames one message: "event: <kind>" and one line of JSON.
