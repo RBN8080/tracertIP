@@ -6,3 +6,4 @@
 *.go        text eol=lf
 *.jq        text eol=lf
 .githooks/* text eol=lf
+*.example   text eol=lf
