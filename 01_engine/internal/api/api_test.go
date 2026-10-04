@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,8 +61,8 @@ func testServer(t *testing.T) (*Server, *httptest.Server) {
 	events.Add(model.Event{Type: model.TypeEvent, State: model.StateConfirmed, Target: tgt.String(),
 		Before: []int{accessASN, 64500, 64510}, After: []int{accessASN, 64501, 64510}})
 	s := New(Config{
-		Targets: []Target{{Monitor: m, Path: func() []int { return []int{accessASN, 64500, 64510} }}},
-		Events:  events, AccessASN: accessASN, Hub: NewHub(),
+		Fleet:  newFakeFleet(Target{Monitor: m, Path: func() []int { return []int{accessASN, 64500, 64510} }}),
+		Events: events, AccessASN: accessASN, Hub: NewHub(),
 		Node: func() Node { return Node{Version: "test", ClockSynced: true} },
 		Home: func(a netip.Addr) bool {
 			n, ok := asn[a]
@@ -102,13 +103,13 @@ func TestRoutes(t *testing.T) {
 			t.Errorf("GET %s = %d %q, want %d", path, got, body, code)
 		}
 	}
-	resp, err := http.Post(ts.URL+"/v1/targets", "application/json", strings.NewReader("{}"))
-	if err != nil {
-		t.Fatal(err)
+	for _, m := range []string{"PUT", "PATCH"} {
+		if code, _ := send(t, m, ts.URL+"/v1/targets", "application/json", "", "{}"); code != http.StatusMethodNotAllowed {
+			t.Errorf("%s /v1/targets = %d, want 405: targets are only added and removed", m, code)
+		}
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("POST /v1/targets = %d, want 405: the API is read-only", resp.StatusCode)
+	if code, _ := send(t, "POST", ts.URL+"/v1/events", "application/json", "", "{}"); code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /v1/events = %d, want 405", code)
 	}
 	_, _, h := get(t, ts.URL+"/v1/health")
 	if h.Get("X-Content-Type-Options") != "nosniff" || h.Get("Content-Security-Policy") == "" || h.Get("Cache-Control") != "no-store" {
@@ -160,7 +161,8 @@ func TestStream(t *testing.T) {
 		close(lines)
 	}()
 	sent := time.Now()
-	s.PublishRound(s.targets[tgt].Monitor.Ring.Last(1)[0])
+	first, _ := s.cfg.Fleet.Get(tgt)
+	s.PublishRound(first.Monitor.Ring.Last(1)[0])
 	deadline := time.After(2 * time.Second)
 	for {
 		select {
@@ -229,7 +231,7 @@ func TestUIServed(t *testing.T) {
 // view is refused rather than shown with the ISP's routers in it.
 func TestEmptyAndRefusedPublic(t *testing.T) {
 	m := live.NewMonitor(tgt, live.Config{}, 1, 2)
-	s := New(Config{Targets: []Target{{Monitor: m, Path: func() []int { return nil }}}, Events: route.NewLog(5), Hub: NewHub(),
+	s := New(Config{Fleet: newFakeFleet(Target{Monitor: m, Path: func() []int { return nil }}), Events: route.NewLog(5), Hub: NewHub(),
 		Node: func() Node { return Node{} }, Home: func(netip.Addr) bool { return true }})
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
@@ -245,5 +247,127 @@ func TestEmptyAndRefusedPublic(t *testing.T) {
 		if code, body, _ := get(t, ts.URL+path); code != http.StatusServiceUnavailable || !strings.Contains(body, "access_asn") {
 			t.Errorf("%s = %d %q, want 503 naming access_asn", path, code, body)
 		}
+	}
+}
+
+// fakeFleet keeps targets in memory with the fleet's rules.
+type fakeFleet struct {
+	mu   sync.Mutex
+	list []Target
+	by   []string
+}
+
+func newFakeFleet(ts ...Target) *fakeFleet { return &fakeFleet{list: ts} }
+
+func (f *fakeFleet) Targets() []Target {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Target(nil), f.list...)
+}
+
+func (f *fakeFleet) Get(a netip.Addr) (Target, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, t := range f.list {
+		if t.Monitor.Target == a {
+			return t, true
+		}
+	}
+	return Target{}, false
+}
+
+func (f *fakeFleet) Add(a netip.Addr, by string) error {
+	if err := live.CheckTarget(a); err != nil {
+		return err
+	}
+	if _, ok := f.Get(a); ok {
+		return live.ErrExists
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.list) >= live.MaxTargets {
+		return live.ErrFull
+	}
+	f.list = append(f.list, Target{Monitor: live.NewMonitor(a, live.Config{}, 1, 2), Path: func() []int { return nil }})
+	f.by = append(f.by, by)
+	return nil
+}
+
+func (f *fakeFleet) Remove(a netip.Addr, by string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, t := range f.list {
+		if t.Monitor.Target == a {
+			f.list = append(f.list[:i], f.list[i+1:]...)
+			return nil
+		}
+	}
+	return live.ErrUnknown
+}
+
+func send(t *testing.T, method, url, ctype, origin, body string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(method, url, strings.NewReader(body))
+	if ctype != "" {
+		req.Header.Set("Content-Type", ctype)
+	}
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// Typing an address adds it; the frontier and the address rules hold; only
+// this server's own pages may change the list (no cross-site requests).
+func TestAddAndRemoveTargets(t *testing.T) {
+	s, ts := testServer(t)
+	own := ts.URL // the Origin a browser sends for this server's page
+	add := func(body, ctype, origin string) (int, string) {
+		return send(t, "POST", ts.URL+"/v1/targets", ctype, origin, body)
+	}
+	if code, body := add(`{"target":"203.0.113.50"}`, "application/json", own); code != http.StatusCreated || !strings.Contains(body, "203.0.113.50") {
+		t.Fatalf("add = %d %q", code, body)
+	}
+	if f := s.cfg.Fleet.(*fakeFleet); f.by[0] != "127.0.0.1" {
+		t.Errorf("audit names %q, want the client's address", f.by[0])
+	}
+	for _, tc := range []struct {
+		name, body, ctype, origin string
+		code                      int
+	}{
+		{"twice", `{"target":"203.0.113.50"}`, "application/json", own, http.StatusConflict},
+		{"a name", `{"target":"example.org"}`, "application/json", "", http.StatusBadRequest},
+		{"a range", `{"target":"203.0.113.0/24"}`, "application/json", "", http.StatusBadRequest},
+		{"loopback", `{"target":"127.0.0.1"}`, "application/json", "", http.StatusBadRequest},
+		{"not JSON", `target=203.0.113.51`, "application/x-www-form-urlencoded", "", http.StatusUnsupportedMediaType},
+		{"another site", `{"target":"203.0.113.51"}`, "application/json", "http://evil.example", http.StatusForbidden},
+		{"bad body", `{"target":`, "application/json", "", http.StatusBadRequest},
+	} {
+		if code, body := add(tc.body, tc.ctype, tc.origin); code != tc.code {
+			t.Errorf("%s: %d %q, want %d", tc.name, code, body, tc.code)
+		}
+	}
+	for _, a := range []string{"203.0.113.51", "203.0.113.52", "203.0.113.53"} {
+		if code, body := add(`{"target":"`+a+`"}`, "application/json", ""); code != http.StatusCreated {
+			t.Fatalf("add %s = %d %q", a, code, body)
+		}
+	}
+	if code, body := add(`{"target":"203.0.113.54"}`, "application/json", ""); code != http.StatusConflict || !strings.Contains(body, "frontier") {
+		t.Errorf("sixth target = %d %q, want 409 naming the frontier", code, body)
+	}
+	if code, _ := send(t, "DELETE", ts.URL+"/v1/targets/203.0.113.50", "", "http://evil.example", ""); code != http.StatusForbidden {
+		t.Errorf("remove from another site = %d, want 403", code)
+	}
+	if code, _ := send(t, "DELETE", ts.URL+"/v1/targets/203.0.113.50", "", "", ""); code != http.StatusNoContent {
+		t.Errorf("remove = %d, want 204", code)
+	}
+	if code, _ := send(t, "DELETE", ts.URL+"/v1/targets/203.0.113.50", "", "", ""); code != http.StatusNotFound {
+		t.Errorf("remove twice = %d, want 404", code)
 	}
 }

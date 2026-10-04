@@ -380,3 +380,92 @@ func TestWindowPerTTL(t *testing.T) {
 		t.Errorf("hop 2 percentiles: p50 %v p95 %v min %v; want a median, no p95 from 45 RTTs, min 30", h.P50MS, h.P95MS, *h.MinMS)
 	}
 }
+
+// Targets come and go while the fleet runs; the frontier holds; the list and
+// an audit line survive; a restart picks the saved list up.
+func TestFleet(t *testing.T) {
+	var down atomic.Bool
+	var opened atomic.Int32
+	mcfg := testConfig(t, &down, &opened)
+	state := t.TempDir()
+	var rounds atomic.Int32
+	var changes [][]netip.Addr
+	var mu sync.Mutex
+	newFleet := func() (*Fleet, []netip.Addr) {
+		f, saved, err := NewFleet(FleetConfig{Monitor: mcfg, Store: mcfg.Store, Log: mcfg.Log, State: state,
+			Events: route.NewLog(10),
+			Resolve: func(_ context.Context, addrs []netip.Addr) (map[netip.Addr]int, error) {
+				return map[netip.Addr]int{}, nil
+			},
+			OnRound: func(Round) { rounds.Add(1) },
+			OnChange: func(l []netip.Addr) {
+				mu.Lock()
+				changes = append(changes, l)
+				mu.Unlock()
+			},
+			Fail: func(err error) { t.Errorf("fleet failed: %v", err) },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f, saved
+	}
+	f, saved := newFleet()
+	if saved != nil {
+		t.Fatalf("nothing saved yet, got %v", saved)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := f.Start(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	addrs := []string{"192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4", "192.0.2.5"}
+	for _, s := range addrs {
+		if err := f.Add(netip.MustParseAddr(s), "192.0.2.200"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Add(netip.MustParseAddr("192.0.2.6"), "x"); !errors.Is(err, ErrFull) {
+		t.Errorf("sixth target: %v, want ErrFull", err)
+	}
+	if err := f.Add(netip.MustParseAddr("192.0.2.1"), "x"); !errors.Is(err, ErrExists) {
+		t.Errorf("twice: %v, want ErrExists", err)
+	}
+	if err := f.Add(netip.MustParseAddr("::1"), "x"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("loopback: %v, want ErrInvalid", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for rounds.Load() < 10 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if rounds.Load() < 10 {
+		t.Fatalf("only %d rounds from five targets", rounds.Load())
+	}
+	if err := f.Remove(netip.MustParseAddr("192.0.2.3"), "192.0.2.200"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Remove(netip.MustParseAddr("192.0.2.3"), "x"); !errors.Is(err, ErrUnknown) {
+		t.Errorf("remove twice: %v, want ErrUnknown", err)
+	}
+	if got := len(f.Members()); got != 4 {
+		t.Errorf("%d members after a removal, want 4", got)
+	}
+	cancel()
+	f.Wait()
+	mu.Lock()
+	if n := len(changes); n != 6 || len(changes[n-1]) != 4 {
+		t.Errorf("changes seen: %v", changes)
+	}
+	mu.Unlock()
+	log, _ := os.ReadFile(filepath.Join(state, "targets-log.jsonl"))
+	if strings.Count(string(log), `"action":"add"`) != 5 || strings.Count(string(log), `"action":"remove"`) != 1 ||
+		!strings.Contains(string(log), `"by":"192.0.2.200"`) {
+		t.Errorf("audit log:\n%s", log)
+	}
+
+	_, saved = newFleet()
+	want := []netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.2.2"),
+		netip.MustParseAddr("192.0.2.4"), netip.MustParseAddr("192.0.2.5")}
+	if !slices.Equal(saved, want) {
+		t.Errorf("saved list %v, want %v", saved, want)
+	}
+}

@@ -72,7 +72,7 @@ func TestServeRuns(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("exit %d: %s", code, errs.String())
 	}
-	if !strings.Contains(out.String(), "tracertip serve: 2 targets") {
+	if !strings.Contains(out.String(), "tracertip serve: 2 of at most 5 targets") {
 		t.Errorf("start line: %q", out.String())
 	}
 	day := time.Now().UTC().Format(time.DateOnly)
@@ -118,11 +118,9 @@ func TestServeLiveAPI(t *testing.T) {
 		return &fakePath{target: a, mode: "up", replies: make(chan []byte, 64)}, nil
 	}
 	dir := t.TempDir()
-	list := filepath.Join(dir, "targets.txt")
-	os.WriteFile(list, []byte("192.0.2.1\n"), 0o644)
 	cfg := filepath.Join(dir, "config.json")
 	os.WriteFile(cfg, []byte("{}"), 0o644)
-	args := []string{"serve", "-targets", list, "-state", filepath.Join(dir, "live"), "-config", cfg, "-for", "3s"}
+	args := []string{"serve", "-state", filepath.Join(dir, "live"), "-config", cfg, "-for", "3s"}
 
 	var errs bytes.Buffer
 	if code := run(append(args, "-listen", "0.0.0.0:0"), io.Discard, &errs); code != exitUsage || !strings.Contains(errs.String(), "LAN only") {
@@ -134,12 +132,24 @@ func TestServeLiveAPI(t *testing.T) {
 	go func() { done <- run(append(args, "-listen", "127.0.0.1:0"), &out, io.Discard) }()
 	var base string
 	for deadline := time.Now().Add(2 * time.Second); base == "" && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if _, rest, ok := strings.Cut(out.String(), "live API on "); ok {
+		if _, rest, ok := strings.Cut(out.String(), "live view on "); ok {
 			base, _, _ = strings.Cut(rest, " ")
+			base += "v1/"
 		}
 	}
 	if base == "" {
 		t.Fatalf("no API address printed: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "0 of at most 5 targets") {
+		t.Errorf("start line: %q", out.String())
+	}
+	add, err := http.Post(base+"targets", "application/json", strings.NewReader(`{"target":"192.0.2.1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	add.Body.Close()
+	if add.StatusCode != http.StatusCreated {
+		t.Fatalf("adding a target: %d", add.StatusCode)
 	}
 	resp, err := http.Get(base + "stream")
 	if err != nil {

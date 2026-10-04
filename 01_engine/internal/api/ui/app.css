@@ -14,6 +14,18 @@ h1 { font-size: 1.4rem; margin: 0; } .sub { font-weight: 400; color: var(--muted
 h2 { font-size: 1.05rem; margin: 24px 0 8px; }
 .muted { color: var(--muted); }
 .toggle { margin-left: auto; }
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.search { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 16px; }
+.search input { flex: 1 1 280px; font: inherit; padding: 8px 10px; color: var(--fg); background: var(--card);
+  border: 1px solid var(--line); border-radius: 8px; }
+.search button, .remove { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+.search button { border-color: var(--accent); }
+#msg.error { color: var(--bad); }
+nav li { display: flex; align-items: stretch; }
+nav li .remove { padding: 0 10px; margin-left: -1px; border-radius: 0 8px 8px 0; }
+nav li .pick { border-radius: 8px 0 0 8px; }
+.empty { color: var(--muted); padding: 8px 0; }
 nav ul { list-style: none; padding: 0; margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 8px; }
 nav button { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line);
   border-radius: 8px; padding: 6px 10px; cursor: pointer; text-align: left; }

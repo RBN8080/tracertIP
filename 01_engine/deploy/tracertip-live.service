@@ -1,7 +1,8 @@
-# Live telemetry: tracertip serve, probing the declared targets without end
-# and serving the live view on the LAN. Raw sockets through an ambient
-# capability only; history in /var/lib/tracertip/live. LISTEN comes from
-# /etc/tracertip/live.env (a private LAN address; template live.env.example).
+# Live telemetry: tracertip serve. Targets are typed into the live view on
+# the LAN (at most 5 at once) and probed without end; the list is kept in
+# /var/lib/tracertip/live with the history. Raw sockets through an ambient
+# capability only. LISTEN comes from /etc/tracertip/live.env (a private LAN
+# address; template live.env.example).
 [Unit]
 Description=tracertip: live telemetry
 Documentation=https://github.com/RBN8080/tracertIP
@@ -15,7 +16,7 @@ Group=tracertip
 StateDirectory=tracertip
 StateDirectoryMode=0755
 EnvironmentFile=/etc/tracertip/live.env
-ExecStart=/usr/local/bin/tracertip serve -targets /etc/tracertip/live-targets.txt -state /var/lib/tracertip/live -config /etc/tracertip/live.json -dir /var/lib/tracertip/bases -listen ${LISTEN}
+ExecStart=/usr/local/bin/tracertip serve -state /var/lib/tracertip/live -config /etc/tracertip/live.json -dir /var/lib/tracertip/bases -listen ${LISTEN}
 Restart=always
 RestartSec=30
 AmbientCapabilities=CAP_NET_RAW

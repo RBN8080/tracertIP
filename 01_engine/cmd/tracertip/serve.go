@@ -30,19 +30,19 @@ import (
 func runServe(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	list := fs.String("targets", "", "file with the targets, one IP per line, # for comments (at most 5)")
-	dir := fs.String("state", "", "folder for the history")
+	list := fs.String("targets", "", "file with the first targets, one IP per line (used only while no list is saved)")
+	dir := fs.String("state", "", "folder for the history and the saved target list")
 	capGB := fs.Float64("cap-gb", float64(live.DefaultCap)/(1<<30), "disk the history may use, in GiB")
 	every := fs.Duration("status", time.Minute, "how often to log the health")
 	limit := fs.Duration("for", 0, "stop after this long (0 = until stopped)")
 	cfgPath := fs.String("config", defaultConfigPath(), "configuration file (origin, access ISP, resolver, bases)")
 	bases := fs.String("dir", "", "folder with the bases (default: config, then the user cache)")
-	listen := fs.String("listen", "", "serve the live API on this loopback or private address:port (default: no API)")
+	listen := fs.String("listen", "", "serve the live view and API on this loopback or private address:port (default: none)")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: tracertip serve -targets <file> -state <dir> [flags]")
+		fmt.Fprintln(stderr, "usage: tracertip serve -state <dir> [-listen <addr:port>] [flags]")
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *list == "" || *dir == "" || *capGB <= 0 || *every <= 0 || *limit < 0 {
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *dir == "" || *capGB <= 0 || *every <= 0 || *limit < 0 {
 		if err == nil {
 			fs.Usage()
 		}
@@ -54,10 +54,13 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 			return exitUsage
 		}
 	}
-	targetList, err := readTargets(*list)
-	if err != nil {
-		fmt.Fprintln(stderr, "tracertip:", err)
-		return exitUsage
+	var seed []netip.Addr
+	if *list != "" {
+		var err error
+		if seed, err = readTargets(*list); err != nil {
+			fmt.Fprintln(stderr, "tracertip:", err)
+			return exitUsage
+		}
 	}
 	explicit := false
 	fs.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "config" })
@@ -75,84 +78,142 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		ctx, cancel = context.WithTimeout(ctx, *limit)
 		defer cancel()
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		mu       sync.Mutex
+		failures []error
+	)
+	fail := func(err error) {
+		mu.Lock()
+		failures = append(failures, err)
+		mu.Unlock()
+		cancel()
+	}
+
 	log := slog.New(slog.NewTextHandler(stderr, nil))
 	store, err := live.OpenStore(*dir, int64(*capGB*(1<<30)), time.Now())
 	if err != nil {
 		fmt.Fprintln(stderr, "tracertip:", err)
 		return exitFail
 	}
-	// Filled before any monitor runs; read-only afterwards.
-	analyzers := map[netip.Addr]*live.Analyzer{}
-	var srv *api.Server
-	mcfg := live.Config{
-		Probe: probe.Defaults, Open: open, Source: probe.SourceFor, Store: store, Log: log,
-		Header: func(a netip.Addr, pc probe.Config) any { return startRecord(time.Now(), a, pc, basesDir) },
+	asns := newASNCache(asnResolver(basesDir))
+	events := route.NewLog(eventLogSize)
+	var srv *api.Server // set before the fleet starts; read-only afterwards
+	fleet, saved, err := live.NewFleet(live.FleetConfig{
+		Monitor: live.Config{Probe: probe.Defaults, Open: open, Source: probe.SourceFor, Store: store, Log: log,
+			Header: func(a netip.Addr, pc probe.Config) any { return startRecord(time.Now(), a, pc, basesDir) }},
+		Resolve: asns.Resolve, Events: events, Store: store, Log: log, State: *dir, Fail: fail,
 		OnRound: func(r live.Round) {
-			analyzers[r.Target].Feed(r)
 			if srv != nil {
 				srv.PublishRound(r)
 			}
 		},
+		OnChange: func(l []netip.Addr) {
+			if srv != nil {
+				srv.PublishTargets(l)
+			}
+		},
+	})
+	if err != nil {
+		store.Close()
+		fmt.Fprintln(stderr, "tracertip:", err)
+		return exitFail
 	}
-	events := route.NewLog(eventLogSize)
-	asns := newASNCache(asnResolver(basesDir))
-	monitors := make([]*live.Monitor, len(targetList))
-	for i, a := range targetList {
-		monitors[i] = live.NewMonitor(a, mcfg, random16(), random16())
-		analyzers[a] = live.NewAnalyzer(monitors[i], asns.Resolve, events, store, log)
+	if saved == nil { // no list saved yet: the seed file, if any
+		saved = seed
 	}
-	fmt.Fprintf(stdout, "tracertip serve: %d targets, one round every %s each; history in %s (cap %.1f GiB); Ctrl-C stops\n",
-		len(monitors), probe.Defaults.RoundInterval, *dir, *capGB)
 
-	var extra []func(context.Context) error
+	var hs *http.Server
+	var ln net.Listener
 	if *listen != "" {
-		var targets []api.Target
-		for _, m := range monitors {
-			targets = append(targets, api.Target{Monitor: m, Path: analyzers[m.Target].Path})
-		}
 		j := &hopJudge{cfg: cfg, opts: enrichOptions(cfg, *bases, "", false, false), known: map[netip.Addr]enrich.Info{}}
 		j.opts.NoCity = true
 		srv = api.New(api.Config{
-			Targets: targets, Events: events, Hops: j.hops, Home: asns.home(cfg.AccessASN), AccessASN: cfg.AccessASN, Hub: api.NewHub(),
+			Fleet: fleetView{fleet}, Events: events, Hops: j.hops, Home: asns.home(cfg.AccessASN), AccessASN: cfg.AccessASN,
+			Hub: api.NewHub(),
 			Node: func() api.Node {
 				t, free := batch.Health(*dir)
 				return api.Node{Version: version(), ClockSynced: batch.ClockSynced(), TempC: t, DiskFreeMB: free, RSSMB: batch.RSSMB()}
 			},
 		})
 		events.OnAdd(srv.PublishEvents)
-		ln, err := net.Listen("tcp", *listen)
-		if err != nil {
+		if ln, err = net.Listen("tcp", *listen); err != nil {
 			store.Close()
 			fmt.Fprintln(stderr, "tracertip:", err)
 			return exitFail
 		}
-		hs := srv.HTTPServer(*listen)
-		fmt.Fprintf(stdout, "tracertip serve: live API on http://%s/v1/ (LAN only)\n", ln.Addr())
-		extra = append(extra, func(ctx context.Context) error {
-			go srv.Run(ctx)
-			go func() {
-				<-ctx.Done()
-				sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				hs.Shutdown(sctx)
-			}()
+		hs = srv.HTTPServer(*listen)
+	}
+	if err := fleet.Start(ctx, saved); err != nil {
+		cancel()
+		fleet.Wait()
+		store.Close()
+		fmt.Fprintln(stderr, "tracertip:", err)
+		return exitFail
+	}
+	fmt.Fprintf(stdout, "tracertip serve: %d of at most %d targets, one round every %s each; history in %s (cap %.1f GiB); Ctrl-C stops\n",
+		len(fleet.Members()), live.MaxTargets, probe.Defaults.RoundInterval, *dir, *capGB)
+
+	var wg sync.WaitGroup
+	if hs != nil {
+		fmt.Fprintf(stdout, "tracertip serve: live view on http://%s/ (LAN only; type an IP address to trace it)\n", ln.Addr())
+		wg.Go(func() { srv.Run(ctx) })
+		wg.Go(func() {
 			if err := hs.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
-				return err
+				fail(err)
 			}
-			return nil
 		})
 	}
-
-	err = serve(ctx, monitors, analyzers, extra, probe.Defaults.RoundInterval, *every, *dir, log)
-	if cerr := store.Close(); err == nil {
-		err = cerr
+	t := time.NewTicker(*every)
+	for ctx.Err() == nil {
+		select {
+		case <-ctx.Done():
+		case <-t.C:
+			logHealth(log, fleet, *dir)
+		}
 	}
-	if err != nil {
-		fmt.Fprintln(stderr, "tracertip:", err)
+	t.Stop()
+	if hs != nil {
+		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
+		hs.Shutdown(sctx)
+		scancel()
+	}
+	wg.Wait()
+	fleet.Wait()
+	if err := store.Close(); err != nil {
+		fail(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(failures) > 0 {
+		fmt.Fprintln(stderr, "tracertip:", errors.Join(failures...))
 		return exitFail
 	}
 	return exitOK
 }
+
+// fleetView shows the fleet to the API.
+type fleetView struct{ f *live.Fleet }
+
+func (v fleetView) Targets() []api.Target {
+	var out []api.Target
+	for _, m := range v.f.Members() {
+		out = append(out, api.Target{Monitor: m.Monitor, Path: m.Analyzer.Path})
+	}
+	return out
+}
+
+func (v fleetView) Get(a netip.Addr) (api.Target, bool) {
+	m, ok := v.f.Get(a)
+	if !ok {
+		return api.Target{}, false
+	}
+	return api.Target{Monitor: m.Monitor, Path: m.Analyzer.Path}, true
+}
+
+func (v fleetView) Add(a netip.Addr, by string) error    { return v.f.Add(a, by) }
+func (v fleetView) Remove(a netip.Addr, by string) error { return v.f.Remove(a, by) }
 
 // eventLogSize is how many route events memory keeps for every target: at
 // the rehearsal's 74 records a day for 122 paths, weeks of them.
@@ -179,89 +240,22 @@ func asnResolver(dir string) live.Resolver {
 	}
 }
 
-// serve runs the monitors with their rounds staggered evenly over the round
-// interval, so the targets' probes do not leave together (00_IDEA 5), runs
-// their analyzers, and logs their health every so often. The first that
-// cannot write its history or read the bases stops them all.
-func serve(ctx context.Context, monitors []*live.Monitor, analyzers map[netip.Addr]*live.Analyzer,
-	extra []func(context.Context) error, interval, every time.Duration, dir string, log *slog.Logger) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		errs []error
-	)
-	fail := func(who netip.Addr, err error) {
-		if who.IsValid() {
-			err = fmt.Errorf("%s: %w", who, err)
-		}
-		mu.Lock()
-		errs = append(errs, err)
-		mu.Unlock()
-		cancel()
-	}
-	for _, run := range extra {
-		wg.Go(func() {
-			if err := run(ctx); err != nil {
-				fail(netip.Addr{}, err)
-			}
-		})
-	}
-	for i, m := range monitors {
-		wg.Go(func() {
-			if err := analyzers[m.Target].Run(ctx); err != nil {
-				fail(m.Target, err)
-			}
-		})
-		wg.Go(func() {
-			if !wait(ctx, interval*time.Duration(i)/time.Duration(len(monitors))) {
-				return
-			}
-			if err := m.Run(ctx); err != nil {
-				fail(m.Target, err)
-			}
-		})
-	}
-	t := time.NewTicker(every)
-	defer t.Stop()
-	for ctx.Err() == nil {
-		select {
-		case <-ctx.Done():
-		case <-t.C:
-			logHealth(log, monitors, analyzers, dir)
-		}
-	}
-	wg.Wait()
-	return errors.Join(errs...)
-}
-
-func logHealth(log *slog.Logger, monitors []*live.Monitor, analyzers map[netip.Addr]*live.Analyzer, dir string) {
+func logHealth(log *slog.Logger, fleet *live.Fleet, dir string) {
 	tempC, freeMB := batch.Health(dir)
-	log.Info("node", "clock_synced", batch.ClockSynced(), "temp_c", tempC, "disk_free_mb", freeMB, "rss_mb", batch.RSSMB())
-	for _, m := range monitors {
-		h := m.Health()
+	members := fleet.Members()
+	log.Info("node", "clock_synced", batch.ClockSynced(), "temp_c", tempC, "disk_free_mb", freeMB, "rss_mb", batch.RSSMB(),
+		"targets", len(members))
+	for _, m := range members {
+		h := m.Monitor.Health()
 		log.Info("target", "target", h.Target, "state", h.State, "rounds", h.Rounds, "replied", h.Replied,
 			"no_reply", h.NoReply, "send_errors", h.SendErrors, "sessions", h.Sessions,
 			"lag_ms", fmt.Sprintf("%.0f", h.LagMS), "max_lag_ms", fmt.Sprintf("%.0f", h.MaxLagMS),
-			"path", analyzers[m.Target].Path(), "unanalyzed", analyzers[m.Target].Dropped(), "err", h.Error)
+			"path", m.Analyzer.Path(), "unanalyzed", m.Analyzer.Dropped(), "err", h.Error)
 	}
 }
 
-func wait(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
-	}
-}
-
-// readTargets reads the declared targets: IP addresses only, no names or
-// ranges, at most live.MaxTargets (00_IDEA 1.bis: it measures paths, it
-// does not scan).
+// readTargets reads a seed list: IP addresses only, no names or ranges, at
+// most live.MaxTargets (00_IDEA 1.bis: it measures paths, it does not scan).
 func readTargets(path string) ([]netip.Addr, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -281,7 +275,7 @@ func readTargets(path string) ([]netip.Addr, error) {
 			return nil, fmt.Errorf("%s:%d: %q is not an IP address", path, n, line)
 		}
 		a = a.Unmap()
-		if a.IsUnspecified() || a.IsLoopback() || a.IsMulticast() || a.IsLinkLocalUnicast() {
+		if live.CheckTarget(a) != nil {
 			return nil, fmt.Errorf("%s:%d: %s cannot be a target", path, n, a)
 		}
 		if slices.Contains(out, a) {

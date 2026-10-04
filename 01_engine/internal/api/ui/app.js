@@ -41,27 +41,68 @@ function el(tag, attrs = {}, html = "") {
 function drawTargets() {
   const ul = $("targets");
   ul.replaceChildren();
+  if (!state.targets.length) {
+    ul.append(el("li", { class: "empty" }, "No targets yet: type an IPv4 or IPv6 address above to see its path live (up to 5 at once)."));
+  }
   for (const t of state.targets) {
     const last = t.last || {};
-    const b = el("button", { type: "button", "aria-pressed": String(t.target === state.selected) },
+    const b = el("button", { type: "button", class: "pick", "aria-pressed": String(t.target === state.selected) },
       `<span class="dot ${esc((t.state || "").replace(" ", "-"))}"></span>${esc(t.target)}<br>` +
       `<span class="small">min ${fmt(last.min_ms)} · p50 ${fmt(last.p50_ms)} · p95 ${fmt(last.p95_ms)} · loss ${last.loss_pct === undefined ? "—" : last.loss_pct.toFixed(0) + " %"}</span>`);
     b.addEventListener("click", () => select(t.target));
+    const x = el("button", { type: "button", class: "remove", "aria-label": "Stop tracing " + t.target, title: "Stop tracing" }, "×");
+    x.addEventListener("click", () => removeTarget(t.target));
     const li = el("li");
-    li.append(b);
+    li.append(b, x);
     ul.append(li);
   }
 }
 
 async function refreshTargets() {
   state.targets = (await getJSON("targets")) || [];
+  if (state.selected && !state.targets.some((t) => t.target === state.selected)) state.selected = null;
   if (!state.selected && state.targets.length) state.selected = state.targets[0].target;
   drawTargets();
+}
+
+function say(text, error) {
+  $("msg").textContent = text;
+  $("msg").className = error ? "error" : "muted";
+}
+
+// Adding a target is a change on the node: plain JSON to this server, never
+// through the public flag (which only shapes what is read).
+async function addTarget(ip) {
+  const r = await fetch("/v1/targets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target: ip }) });
+  if (!r.ok) { say((await r.text()).trim() || "could not add " + ip, true); return; }
+  const added = (await r.json()).target;
+  say(`tracing ${added}: the first round takes a few seconds`);
+  $("ip").value = "";
+  await refreshTargets();
+  await select(added);
+  setTimeout(() => refreshHops().catch(() => {}), 3000);
+}
+
+async function removeTarget(ip) {
+  const r = await fetch("/v1/targets/" + encodeURIComponent(ip), { method: "DELETE" });
+  if (!r.ok && r.status !== 404) { say((await r.text()).trim() || "could not remove " + ip, true); return; }
+  say(`stopped tracing ${ip}`);
+  delete state.rounds[ip];
+  await refreshTargets();
+  await select(state.selected);
+}
+
+function clearPanels() {
+  $("hops").tBodies[0].replaceChildren();
+  $("summary").textContent = "";
+  $("latency").textContent = "";
+  draw();
 }
 
 async function select(target) {
   state.selected = target;
   drawTargets();
+  if (!target) { clearPanels(); return; }
   state.rounds[target] = (await getJSON(`targets/${encodeURIComponent(target)}/rounds`, { n: KEEP })) || [];
   await refreshHops();
   draw();
@@ -71,6 +112,7 @@ async function select(target) {
 
 async function refreshHops() {
   if (!state.selected) return;
+  if (!state.targets.some((t) => t.target === state.selected)) return;
   const recs = await getJSON(`targets/${encodeURIComponent(state.selected)}/hops`);
   const tb = $("hops").tBodies[0];
   tb.replaceChildren();
@@ -246,6 +288,7 @@ function connect() {
     draw();
   });
   state.es.addEventListener("health", (m) => drawHealth(JSON.parse(m.data)));
+  state.es.addEventListener("targets", () => { refreshTargets().then(() => select(state.selected)).catch(() => {}); });
   state.es.onerror = () => { $("node").textContent = "stream lost; the browser reconnects…"; };
 }
 
@@ -257,9 +300,15 @@ async function start() {
   drawEvents();
   drawHealth(await getJSON("health"));
   connect();
-  if (state.selected) await select(state.selected);
+  await select(state.selected);
+  if (!state.targets.length) $("ip").focus();
 }
 
+$("search").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const ip = $("ip").value.trim();
+  if (ip) addTarget(ip).catch((err) => say(err.message, true));
+});
 $("public").addEventListener("change", (e) => {
   state.public = e.target.checked;
   try { localStorage.setItem("public", state.public ? "1" : "0"); } catch (err) { /* blocked */ }

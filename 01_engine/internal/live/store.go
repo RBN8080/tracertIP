@@ -124,6 +124,19 @@ func (s *Store) Write(target netip.Addr, now time.Time, header func() any, recs 
 	return nil
 }
 
+// CloseTarget syncs and closes target's open file, if any: the target left.
+// The day is not over, so it stays uncompressed; writing again reopens it.
+func (s *Store) CloseTarget(target netip.Addr) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	df := s.files[target]
+	if df == nil {
+		return nil
+	}
+	delete(s.files, target)
+	return errors.Join(df.f.Sync(), df.f.Close())
+}
+
 // Close syncs and closes every file and waits for compressions.
 func (s *Store) Close() error {
 	s.mu.Lock()

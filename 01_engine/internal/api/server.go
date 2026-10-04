@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"net/netip"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rbn8080/tracertip/01_engine/internal/live"
@@ -49,11 +51,19 @@ type Node struct {
 	RSSMB       int64   `json:"rss_mb,omitempty"` // the service's resident memory
 }
 
+// Fleet is the set of targets the server shows and changes.
+type Fleet interface {
+	Targets() []Target
+	Get(netip.Addr) (Target, bool)
+	Add(a netip.Addr, by string) error
+	Remove(a netip.Addr, by string) error
+}
+
 // Config wires the server to the running engine.
 type Config struct {
-	Targets []Target
-	Events  *route.Log
-	Node    func() Node
+	Fleet  Fleet
+	Events *route.Log
+	Node   func() Node
 	// Hops judges a target's rounds as the trace command would.
 	Hops func(ctx context.Context, target netip.Addr, rounds []live.Round, public bool) (any, error)
 	// Home says whether an address is on the home side: special-purpose or
@@ -65,18 +75,11 @@ type Config struct {
 
 // Server serves Config over HTTP.
 type Server struct {
-	cfg     Config
-	targets map[netip.Addr]Target
+	cfg Config
 }
 
 // New builds the server; Publish and Run feed its stream.
-func New(cfg Config) *Server {
-	s := &Server{cfg: cfg, targets: map[netip.Addr]Target{}}
-	for _, t := range cfg.Targets {
-		s.targets[t.Monitor.Target] = t
-	}
-	return s
-}
+func New(cfg Config) *Server { return &Server{cfg: cfg} }
 
 // CheckListen refuses addresses reachable from outside the LAN: only an
 // explicit loopback or private address (RFC 1918, RFC 4193) will do. The
@@ -104,6 +107,8 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.Handle("GET /v1/health", quick(s.health))
 	mux.Handle("GET /v1/targets", quick(s.targetList))
+	mux.Handle("POST /v1/targets", quick(s.addTarget))
+	mux.Handle("DELETE /v1/targets/{addr}", quick(s.removeTarget))
 	mux.Handle("GET /v1/targets/{addr}/window", quick(s.window))
 	mux.Handle("GET /v1/targets/{addr}/rounds", quick(s.rounds))
 	mux.Handle("GET /v1/targets/{addr}/hops", quick(s.hops))
@@ -180,7 +185,7 @@ func intParam(r *http.Request, name string, def, lo, hi int) (int, error) {
 
 func (s *Server) target(w http.ResponseWriter, r *http.Request) (Target, bool) {
 	a, err := netip.ParseAddr(r.PathValue("addr"))
-	t, ok := s.targets[a.Unmap()]
+	t, ok := s.cfg.Fleet.Get(a.Unmap())
 	if err != nil || !ok {
 		fail(w, http.StatusNotFound, "not a monitored target")
 		return Target{}, false
@@ -210,7 +215,7 @@ type healthView struct {
 
 func (s *Server) healthNow() healthView {
 	v := healthView{Node: s.cfg.Node(), Targets: []live.Health{}}
-	for _, t := range s.cfg.Targets {
+	for _, t := range s.cfg.Fleet.Targets() {
 		v.Targets = append(v.Targets, t.Monitor.Health())
 	}
 	return v
@@ -228,7 +233,7 @@ type targetView struct {
 func (s *Server) targetList(w http.ResponseWriter, r *http.Request) {
 	pub := public(r)
 	var out []targetView
-	for _, t := range s.cfg.Targets {
+	for _, t := range s.cfg.Fleet.Targets() {
 		v := targetView{Target: t.Monitor.Target.String(), State: t.Monitor.Health().State, Path: list(s.path(t.Path(), pub))}
 		for _, h := range live.Window(t.Monitor.Ring.Last(DefaultRounds)) {
 			if h.Addr == v.Target { // the first TTL that reaches it: its distance
@@ -239,6 +244,98 @@ func (s *Server) targetList(w http.ResponseWriter, r *http.Request) {
 		out = append(out, v)
 	}
 	writeJSON(w, list(out))
+}
+
+// maxBody bounds a request body: one address fits in a few dozen bytes.
+const maxBody = 1 << 10
+
+// sameOrigin keeps other web sites from changing the targets through a
+// browser on the LAN (cross-site request forgery): a change must come as
+// JSON, which a plain form cannot send, and, if the browser names an
+// origin, from this server's own pages.
+func sameOrigin(w http.ResponseWriter, r *http.Request, needJSON bool) bool {
+	if o := r.Header.Get("Origin"); o != "" && o != "http://"+r.Host {
+		fail(w, http.StatusForbidden, "changes come only from this server's own pages")
+		return false
+	}
+	if ct, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";"); needJSON && strings.TrimSpace(ct) != "application/json" {
+		fail(w, http.StatusUnsupportedMediaType, "send the target as application/json")
+		return false
+	}
+	return true
+}
+
+func client(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+func changeError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, live.ErrInvalid):
+		fail(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, live.ErrExists), errors.Is(err, live.ErrFull):
+		fail(w, http.StatusConflict, err.Error())
+	case errors.Is(err, live.ErrUnknown):
+		fail(w, http.StatusNotFound, err.Error())
+	default:
+		fail(w, http.StatusInternalServerError, "the change could not be saved")
+	}
+}
+
+// addTarget declares a target: one IP address per request (00_IDEA 1.bis).
+func (s *Server) addTarget(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(w, r, true) {
+		return
+	}
+	var req struct {
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&req); err != nil {
+		fail(w, http.StatusBadRequest, `send {"target": "<IP address>"}`)
+		return
+	}
+	a, err := netip.ParseAddr(strings.TrimSpace(req.Target))
+	if err != nil {
+		changeError(w, live.ErrInvalid)
+		return
+	}
+	if err := s.cfg.Fleet.Add(a, client(r)); err != nil {
+		changeError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"target": a.Unmap().String()})
+}
+
+func (s *Server) removeTarget(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(w, r, false) {
+		return
+	}
+	a, err := netip.ParseAddr(r.PathValue("addr"))
+	if err != nil {
+		changeError(w, live.ErrUnknown)
+		return
+	}
+	if err := s.cfg.Fleet.Remove(a, client(r)); err != nil {
+		changeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// PublishTargets tells the live viewers the list changed.
+func (s *Server) PublishTargets(list []netip.Addr) {
+	strs := make([]string, len(list))
+	for i, a := range list {
+		strs[i] = a.String()
+	}
+	m := sse("targets", strs)
+	s.cfg.Hub.Publish(m, m)
 }
 
 func (s *Server) window(w http.ResponseWriter, r *http.Request) {

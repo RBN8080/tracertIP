@@ -1,6 +1,0 @@
-# /etc/tracertip/live-targets.txt: the targets serve probes, at most 5, one IP
-# address per line (00_IDEA 1.bis: declared targets only, no names or ranges).
-# Documentation values (RFC 5737, RFC 3849):
-192.0.2.1
-198.51.100.1
-2001:db8::1
