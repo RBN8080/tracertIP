@@ -2,7 +2,7 @@
 
 **Live telemetry of the path to an IP.** It shows which networks the traffic crosses, where each hop is, how far it can be, and what physics (the speed of light in fiber) says about it.
 
-> **Status: Phase 1 closed on 2026-09-29; the observation study is in its second 24 h rehearsal.** The first one passed and exposed two defects in batch mode, fixed on 2026-09-30. This repository holds only structural material: code, scripts and templates that work on any network.
+> **Status: paused on 2026-10-06, with the live service ready to use.** Phases 1 and 2 are closed. The service starts when the node boots: open its address in a browser on the LAN and type an IP address. A third phase (outside context such as BGP) is not planned. This repository holds only structural material: code, scripts and templates that work on any network.
 
 ## Layout
 
@@ -11,8 +11,8 @@ One folder per piece, in order. Only `01_engine/` is production code; `00_` and 
 | Folder | What it is | Status |
 |---|---|---|
 | `00_verification/` | Study: 48 h of real data and the verdict on whether to build | Closed 2026-09-28 |
-| `01_engine/` | Product: traces and judges every hop; grows into live telemetry | Phase 1 closed 2026-09-29; Phase 2 next |
-| `02_observation/` | Study: the engine running untouched for at least 14 days | Second 24 h rehearsal running |
+| `01_engine/` | Product: traces and judges every hop, once or live | Phase 1 closed 2026-09-29; Phase 2 closed 2026-10-06 |
+| `02_observation/` | Study: the engine running untouched for at least 14 days | Rehearsals passed; the 14 days were cancelled on 2026-10-06 |
 
 ## The engine (`01_engine/`)
 
@@ -25,13 +25,14 @@ One binary, `tracertip`, for Linux.
 | `update-db` | Downloads and verifies the local IP bases, each at its source's pace |
 | `targets` | Chooses and checks measurement targets: RIPE Atlas anchors, dual-stack, one BGP origin, outside the anycast census, and no faster than light from their declared place |
 | `batch` | Traces a target list on fixed UTC slots that alternate IPv4 and IPv6, one target at a time. It replaces failing targets from a reserve, never blames a target for the host's own outages, and writes data that survives a power cut |
+| `serve` | Live telemetry: up to 5 targets, one round every 2 s each, without end. A web view built into the binary, on the LAN only: type an IP address to trace it, and see the judged path, a hop-by-time heat map, RTT, route-change events and the instrument's own health. A public mode hides the home side. History is kept per target and day, compressed, under a disk cap |
 
-`01_engine/deploy/` installs the binary with `CAP_NET_RAW` only, plus a daily, hardened update of the bases.
+`01_engine/deploy/` installs the binary with `CAP_NET_RAW` only, a daily, hardened update of the bases, the live service (`tracertip-live.service`) and a host firewall that opens its port to the LAN only.
 
 ## Studies
 
 - **`00_verification/`:** closed and kept as it ran. It has the collector (`mtr`), the watchdog, the host firewall, the analysis that produced the verdict, and read-only monitors over SSH.
-- **`02_observation/`:** the service that runs `tracertip batch` for the study, its start and stop scripts, and `status.sh`, a one-screen, read-only view of the running study.
+- **`02_observation/`:** the service that runs `tracertip batch` for the study, its start and stop scripts, and `status.sh`, a one-screen, read-only view of the running study. The study itself was cancelled after its rehearsals: live telemetry keeps continuous history of its targets.
 
 ## What it does, and what it does not
 
@@ -41,7 +42,7 @@ One binary, `tracertip`, for Linux.
 
 ## Requirements
 
-- A Linux host that is always on, with `systemd`.
+- A Linux host with `systemd`. It need not be always on: the live service starts at boot, and a missed base update runs then.
 - Go 1.27 or later, to build:
 
   ```sh
@@ -90,4 +91,4 @@ MIT. See `LICENSE`.
 
 ---
 
-*Updated: 2026-09-30 12:31 UTC.*
+*Updated: 2026-10-06 01:08 UTC.*

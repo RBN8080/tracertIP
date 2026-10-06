@@ -41,6 +41,6 @@ tracertip batch -state /var/lib/tracertip/study -report   # facts per day
 
 Do not trace from the host by hand while the study runs: one target at a time is part of the method.
 
-**Status:** the first 24 h rehearsal (2026-09-29) passed and exposed two defects in batch mode: the host's own IPv6 outages counted as target failures, and one stale routing answer replaced a healthy target. Both are fixed, and an engine change means a rerun: the second rehearsal has been running since 2026-09-30 12:00 UTC. The 14 days start only if it passes.
+**Status: cancelled on 2026-10-06.** Both 24 h rehearsals passed; the first exposed two defects in batch mode (the host's own IPv6 outages counted as target failures, and one stale routing answer replaced a healthy target), both fixed. The 14 days were not run: live telemetry (`tracertip serve`) keeps continuous history of its targets, and the study no longer had a question of its own. The folder stays as it was, as a record and a working method.
 
-*Updated: 2026-09-30 12:31 UTC.*
+*Updated: 2026-10-06 01:08 UTC.*
