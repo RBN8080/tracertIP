@@ -181,6 +181,50 @@ func TestServeLiveAPI(t *testing.T) {
 	}
 }
 
+// After a power cut the node may boot before the router leases its LAN
+// address: serve measures anyway and keeps trying the address.
+func TestServeMeasuresWithoutItsAddress(t *testing.T) {
+	defer func(o func(netip.Addr) (probe.Conn, error), d probe.Config, r time.Duration) {
+		open, probe.Defaults, listenRetry = o, d, r
+	}(open, probe.Defaults, listenRetry)
+	probe.Defaults.TTLMax, probe.Defaults.Timeout = 3, 30*time.Millisecond
+	probe.Defaults.RoundInterval, probe.Defaults.Spacing = 40*time.Millisecond, time.Millisecond
+	listenRetry = 20 * time.Millisecond
+	open = func(a netip.Addr) (probe.Conn, error) {
+		return &fakePath{target: a, mode: "up", replies: make(chan []byte, 64)}, nil
+	}
+	away := netip.MustParsePrefix("10.0.0.0/8").Addr().As4() // a private address no test host has
+	away[1], away[2], away[3] = 254, 253, 252
+	dir := t.TempDir()
+	list := filepath.Join(dir, "targets.txt")
+	os.WriteFile(list, []byte("192.0.2.1\n"), 0o644)
+	cfg := filepath.Join(dir, "config.json")
+	os.WriteFile(cfg, []byte("{}"), 0o644)
+	state := filepath.Join(dir, "live")
+	var out, errs syncBuffer
+	code := run([]string{"serve", "-targets", list, "-state", state, "-config", cfg, "-for", "400ms",
+		"-listen", netip.AddrPortFrom(netip.AddrFrom4(away), 8080).String()}, &out, &errs)
+	if code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if !strings.Contains(errs.String(), "live view waits") || strings.Contains(out.String(), "live view on") {
+		t.Errorf("stdout %q, stderr %q", out.String(), errs.String())
+	}
+	day := time.Now().UTC().Format(time.DateOnly)
+	b, err := os.ReadFile(filepath.Join(state, live.TargetDir(netip.MustParseAddr("192.0.2.1")), day+".jsonl"))
+	if err != nil || !strings.Contains(string(b), `"type":"probe"`) {
+		t.Errorf("no probes while the address was missing: %v %.80q", err, b)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ln, err := waitListen(ctx, "127.0.0.1:0")
+	if err != nil || ln == nil {
+		t.Fatalf("waitListen on an address the host has: %v, %v", ln, err)
+	}
+	ln.Close()
+}
+
 // The API judges recent rounds like trace: one record per TTL up to the
 // target, and in public form the home router keeps only its TTL and RTT.
 func TestHopJudgeFromRounds(t *testing.T) {

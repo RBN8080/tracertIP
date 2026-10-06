@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -138,7 +139,9 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 			},
 		})
 		events.OnAdd(srv.PublishEvents)
-		if ln, err = net.Listen("tcp", *listen); err != nil {
+		// An address the node does not have yet is not fatal: measuring goes
+		// on, and the view opens once the address comes (see waitListen).
+		if ln, err = net.Listen("tcp", *listen); err != nil && !notHere(err) {
 			store.Close()
 			fmt.Fprintln(stderr, "tracertip:", err)
 			return exitFail
@@ -157,9 +160,21 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 
 	var wg sync.WaitGroup
 	if hs != nil {
-		fmt.Fprintf(stdout, "tracertip serve: live view on http://%s/ (LAN only; type an IP address to trace it)\n", ln.Addr())
 		wg.Go(func() { srv.Run(ctx) })
 		wg.Go(func() {
+			if ln == nil {
+				log.Warn("live view waits: its address is not on this node yet; measuring goes on",
+					"listen", *listen, "retry", listenRetry)
+				var err error
+				if ln, err = waitListen(ctx, *listen); err != nil {
+					fail(err)
+					return
+				}
+				if ln == nil { // stopped while waiting
+					return
+				}
+			}
+			fmt.Fprintf(stdout, "tracertip serve: live view on http://%s/ (LAN only; type an IP address to trace it)\n", ln.Addr())
 			if err := hs.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 				fail(err)
 			}
@@ -191,6 +206,36 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		return exitFail
 	}
 	return exitOK
+}
+
+// listenRetry is how often serve tries the listen address again while the
+// node does not have it. After a power cut on 2026-10-06 the router leased
+// it 3 min after the node booted, and until then serve did not measure.
+var listenRetry = 10 * time.Second
+
+// notHere reports whether a listen failed because the address is not on this
+// host (EADDRNOTAVAIL; on Windows WSAEADDRNOTAVAIL, 10049).
+func notHere(err error) bool {
+	var en syscall.Errno
+	return errors.As(err, &en) && (en == syscall.EADDRNOTAVAIL || runtime.GOOS == "windows" && en == 10049)
+}
+
+// waitListen tries addr every listenRetry until the node has it. Any other
+// failure is returned; a nil listener and error mean ctx ended first.
+func waitListen(ctx context.Context, addr string) (net.Listener, error) {
+	t := time.NewTicker(listenRetry)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, nil
+		case <-t.C:
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err == nil || !notHere(err) {
+			return ln, err
+		}
+	}
 }
 
 // fleetView shows the fleet to the API.
