@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -216,8 +217,8 @@ type AnycastPrefix struct {
 	Sites  int
 }
 
-// ReadAnycastCensus reads the LACeS daily census CSV: prefix,
-// number_of_sites, backing_prefix (Hendriks et al., IMC 2025).
+// ReadAnycastCensus reads the LACeS census CSV kept in the bases folder:
+// prefix, number_of_sites, backing_prefix (Hendriks et al., IMC 2025).
 func ReadAnycastCensus(r io.Reader, fn func(AnycastPrefix) error) (int, error) {
 	cr := csv.NewReader(r)
 	cr.ReuseRecord = true
@@ -236,4 +237,53 @@ func ReadAnycastCensus(r io.Reader, fn func(AnycastPrefix) error) (int, error) {
 		}
 		return true, fn(AnycastPrefix{Prefix: p.Masked(), Sites: n})
 	})
+}
+
+// ConvertAnycastCensus writes the LACeS census export (site counts per method,
+// AB_* and GCD_*, then partial, locations, backing_prefix and ASN) as the CSV
+// ReadAnycastCensus reads. It keeps the prefixes the latency method confirms,
+// largest GCD_* count above 1, with that count as number_of_sites: the rule of
+// the CSV the census published until 2026-10, which the export of the
+// 2026-10-13 snapshot matches row for row (17,120 IPv4, 11,690 IPv6). The
+// per-site locations, most of the export's size, are not kept.
+func ConvertAnycastCensus(r io.Reader, w io.Writer) (int, error) {
+	cr := csv.NewReader(r)
+	cr.ReuseRecord = true
+	col, err := header(cr, "prefix", "backing_prefix")
+	if err != nil {
+		return 0, err
+	}
+	var gcd []string
+	for c := range col {
+		if strings.HasPrefix(c, "GCD_") {
+			gcd = append(gcd, c)
+		}
+	}
+	if len(gcd) == 0 {
+		return 0, errors.New(`no "GCD_" columns`)
+	}
+	slices.Sort(gcd)
+	cw := csv.NewWriter(w)
+	if err := cw.Write([]string{"prefix", "number_of_sites", "backing_prefix"}); err != nil {
+		return 0, err
+	}
+	n, err := readRows(cr, func(f []string) (bool, error) {
+		sites := 0
+		for _, c := range gcd {
+			v, err := strconv.Atoi(f[col[c]])
+			if err != nil || v < 0 {
+				return false, fmt.Errorf("bad %s %q", c, f[col[c]])
+			}
+			sites = max(sites, v)
+		}
+		if sites <= 1 {
+			return false, nil
+		}
+		return true, cw.Write([]string{f[col["prefix"]], strconv.Itoa(sites), f[col["backing_prefix"]]})
+	})
+	if err != nil {
+		return n, err
+	}
+	cw.Flush()
+	return n, cw.Error()
 }

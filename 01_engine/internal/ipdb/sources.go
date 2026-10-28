@@ -9,7 +9,8 @@ import (
 
 // Size caps and row floors come from the files seen on 2026-09-28, with a wide
 // margin (P3): IPtoASN 7 MB gz, DB-IP ASN 7 MB gz, DB-IP City 86 MB gz,
-// OurAirports 12 MB.
+// OurAirports 12 MB; the LACeS IPv4 export, 134 MB once net/http unpacks it,
+// on 2026-10-27.
 const (
 	mb  = 1 << 20
 	gb  = 1 << 30
@@ -64,18 +65,23 @@ func Sources() []Source {
 			MaxBytes: 500 * mb, MaxRaw: 500 * mb, MinRows: 10_000,
 			Validate: func(r io.Reader) (int, error) { return ReadIXMembers(r, func(IXMember) error { return nil }) },
 		},
-		// LACeS anycast census (University of Twente), daily. The data terms are
-		// not stated; the authors publish it openly and ask to be cited.
+		// LACeS anycast census (University of Twente), daily. The repository is
+		// under MPL 2.0; its ATTRIBUTION.md puts backing_prefix under the CAIDA
+		// AUA for public datasets; the authors ask to be cited. Since 2026-10 the
+		// repository holds Parquet only: the CSV export comes from the
+		// manycast.net API and is kept in short form (ConvertAnycastCensus).
 		{
 			Name: "laces-anycast", File: "anycast-ipv4.csv", MinAge: day,
-			URL:      fixed("https://raw.githubusercontent.com/ut-dacs/Anycast-Census/main/IPv4-latest.csv"),
-			MaxBytes: 50 * mb, MaxRaw: 50 * mb, MinRows: 5_000,
+			URL:      fixed("https://manycast.net/api/v1/export/IPv4-latest.csv.gz"),
+			MaxBytes: gb, MaxRaw: gb, MinRows: 5_000,
+			Convert:  ConvertAnycastCensus,
 			Validate: func(r io.Reader) (int, error) { return ReadAnycastCensus(r, func(AnycastPrefix) error { return nil }) },
 		},
 		{
 			Name: "laces-anycast-v6", File: "anycast-ipv6.csv", MinAge: day,
-			URL:      fixed("https://raw.githubusercontent.com/ut-dacs/Anycast-Census/main/IPv6-latest.csv"),
-			MaxBytes: 50 * mb, MaxRaw: 50 * mb, MinRows: 500,
+			URL:      fixed("https://manycast.net/api/v1/export/IPv6-latest.csv.gz"),
+			MaxBytes: gb, MaxRaw: gb, MinRows: 500,
+			Convert:  ConvertAnycastCensus,
 			Validate: func(r io.Reader) (int, error) { return ReadAnycastCensus(r, func(AnycastPrefix) error { return nil }) },
 		},
 		{

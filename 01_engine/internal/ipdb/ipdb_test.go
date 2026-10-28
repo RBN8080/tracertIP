@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -285,5 +287,80 @@ func TestReadAnycastCensus(t *testing.T) {
 	n, err := ReadAnycastCensus(strings.NewReader(csv), func(p AnycastPrefix) error { got = append(got, p); return nil })
 	if err != nil || n != 2 || got[0].Sites != 62 || got[1].Prefix.String() != "2001:db8::/48" {
 		t.Errorf("%d, %v, %+v", n, err, got)
+	}
+}
+
+// census is a LACeS export: one prefix the latency method confirms, one only
+// the anycast-based method sees, one unicast.
+const census = "prefix,AB_ICMPv4,AB_TCPv4,AB_DNSv4,GCD_ICMPv4,GCD_TCPv4,partial,locations,backing_prefix,ASN\n" +
+	`192.0.2.0/24,31,31,31,73,29,False,"[{""id"": ""1"", ""city"": ""X"", ""lat"": 1.5}]",192.0.2.0/24,64496` + "\n" +
+	`198.51.100.0/24,5,0,0,1,1,False,"[]",198.51.100.0/23,64497` + "\n" +
+	`203.0.113.0/24,0,0,0,1,0,False,"[]",203.0.113.0/24,64498` + "\n"
+
+const censusKept = "prefix,number_of_sites,backing_prefix\n192.0.2.0/24,73,192.0.2.0/24\n"
+
+func TestConvertAnycastCensus(t *testing.T) {
+	var b strings.Builder
+	if n, err := ConvertAnycastCensus(strings.NewReader(census), &b); err != nil || n != 1 || b.String() != censusKept {
+		t.Errorf("IPv4: %d, %v, %q", n, err, b.String())
+	}
+	v6 := "prefix,AB_ICMPv6,AB_TCPv6,AB_DNSv6,GCD_ICMPv6,GCD_TCPv6,locations,backing_prefix,ASN\n" +
+		`2001:db8::/48,3,0,3,2,5,"[]",2001:db8::/32,64496` + "\n"
+	b.Reset()
+	if n, err := ConvertAnycastCensus(strings.NewReader(v6), &b); err != nil || n != 1 ||
+		b.String() != "prefix,number_of_sites,backing_prefix\n2001:db8::/48,5,2001:db8::/32\n" {
+		t.Errorf("IPv6: %d, %v, %q", n, err, b.String())
+	}
+	for name, bad := range map[string]string{
+		"short form":  censusKept,
+		"bad count":   strings.Replace(census, ",73,", ",x,", 1),
+		"short row":   census + "192.0.2.0/24,1\n",
+		"no prefixes": "AB_ICMPv4,GCD_ICMPv4\n1,1\n",
+	} {
+		if _, err := ConvertAnycastCensus(strings.NewReader(bad), io.Discard); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// The census server sends its .csv.gz as Content-Encoding gzip, which net/http
+// unpacks; a plain gzip body must work too. The manifest describes the file kept.
+func TestUpdateCensus(t *testing.T) {
+	encoded, body := true, gz(census)
+	srv, c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		if encoded {
+			w.Header().Set("Content-Encoding", "gzip")
+		}
+		w.Write(body)
+	})
+	var src Source
+	for _, s := range Sources() {
+		if s.Name == "laces-anycast" {
+			src = s
+		}
+	}
+	src.URL = fixed(srv.URL + "/IPv4-latest.csv.gz")
+	src.MinRows = 1
+	for _, encoded = range []bool{true, false} {
+		dir := t.TempDir()
+		e, err := Update(context.Background(), c, dir, src, Token{}, time.Now())
+		kept, _ := os.ReadFile(filepath.Join(dir, src.File))
+		sum := sha256.Sum256(kept)
+		if err != nil || e.Rows != 1 || string(kept) != censusKept || e.SHA256 != hex.EncodeToString(sum[:]) {
+			t.Errorf("Content-Encoding %v: %+v, %v, %q", encoded, e, err, kept)
+		}
+		if left, _ := filepath.Glob(filepath.Join(dir, ".download-*")); len(left) != 0 {
+			t.Errorf("Content-Encoding %v: temporary files left: %v", encoded, left)
+		}
+		if encoded {
+			continue
+		}
+		body = gz(censusKept) // an export in another form never replaces the file in use
+		if _, err := Update(context.Background(), c, dir, src, Token{}, time.Now()); err == nil {
+			t.Error("short form accepted as an export")
+		}
+		if cur, _ := os.ReadFile(filepath.Join(dir, src.File)); string(cur) != censusKept {
+			t.Error("a rejected export replaced the file in use")
+		}
 	}
 }

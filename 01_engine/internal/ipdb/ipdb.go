@@ -4,6 +4,8 @@
 package ipdb
 
 import (
+	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -33,6 +35,9 @@ type Source struct {
 	MaxRaw     int64                        // decompressed cap (CWE-409)
 	MinRows    int                          // sanity floor for a complete file
 	Validate   func(io.Reader) (int, error) // parses the whole file, returns rows
+	// Convert, if set, rewrites the download into the file kept, which
+	// Validate then checks; MaxRaw caps what it reads.
+	Convert func(io.Reader, io.Writer) (int, error)
 }
 
 // Entry records the file in use for one source.
@@ -119,6 +124,12 @@ func Update(ctx context.Context, c *http.Client, dir string, src Source, tok Tok
 		return Entry{}, fmt.Errorf("%s: %s", src.Name, tok.redact(err.Error()))
 	}
 	defer os.Remove(tmp) // no-op after a successful rename
+	if src.Convert != nil {
+		if tmp, sum, err = convert(dir, tmp, src); err != nil {
+			return Entry{}, fmt.Errorf("%s: rejected: %w", src.Name, err)
+		}
+		defer os.Remove(tmp)
+	}
 	rows, err := validate(tmp, src)
 	if err != nil {
 		return Entry{}, fmt.Errorf("%s: rejected: %w", src.Name, err)
@@ -173,6 +184,47 @@ func download(ctx context.Context, c *http.Client, dir, u string, max int64) (st
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
+	return writeTemp(dir, func(w io.Writer) error {
+		n, err := io.Copy(w, io.LimitReader(resp.Body, max+1))
+		if err == nil && n > max {
+			err = fmt.Errorf("larger than %d bytes", max)
+		}
+		return err
+	})
+}
+
+// convert rewrites the download at path with src.Convert into a new temporary
+// file. The census server sends its .csv.gz as Content-Encoding gzip, which
+// net/http undoes; a body that is still gzip is read as such.
+func convert(dir, path string, src Source) (string, string, error) {
+	in, err := os.Open(path)
+	if err != nil {
+		return "", "", err
+	}
+	defer in.Close()
+	br := bufio.NewReader(in)
+	var r io.Reader = br
+	if magic, _ := br.Peek(2); bytes.Equal(magic, []byte{0x1f, 0x8b}) {
+		gz, err := gzip.NewReader(br)
+		if err != nil {
+			return "", "", err
+		}
+		defer gz.Close()
+		r = gz
+	}
+	return writeTemp(dir, func(w io.Writer) error {
+		lr := &capped{r: r, left: src.MaxRaw}
+		if _, err := src.Convert(lr, w); err != nil {
+			return err
+		}
+		_, err := io.Copy(io.Discard, lr) // trailing data must still fit
+		return err
+	})
+}
+
+// writeTemp fills a new temporary file in dir and returns its name and
+// SHA-256; on any error the file is removed.
+func writeTemp(dir string, fill func(io.Writer) error) (string, string, error) {
 	f, err := os.CreateTemp(dir, ".download-*")
 	if err != nil {
 		return "", "", err
@@ -183,10 +235,7 @@ func download(ctx context.Context, c *http.Client, dir, u string, max int64) (st
 		return "", "", err
 	}
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, max+1))
-	if err == nil && n > max {
-		err = fmt.Errorf("larger than %d bytes", max)
-	}
+	err = fill(io.MultiWriter(f, h))
 	if err == nil {
 		err = f.Sync()
 	}
