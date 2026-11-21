@@ -61,9 +61,12 @@ type Fleet interface {
 
 // Config wires the server to the running engine.
 type Config struct {
-	Fleet  Fleet
-	Events *route.Log
-	Node   func() Node
+	Fleet          Fleet
+	Events         *route.Log
+	Node           func() Node
+	NodeName       string
+	Store          *live.Store
+	ResolveHistory live.Resolver
 	// Hops judges a target's rounds as the trace command would.
 	Hops func(ctx context.Context, target netip.Addr, rounds []live.Round, public bool) (any, error)
 	// Home says whether an address is on the home side: special-purpose or
@@ -75,11 +78,12 @@ type Config struct {
 
 // Server serves Config over HTTP.
 type Server struct {
-	cfg Config
+	cfg          Config
+	historyReads chan struct{}
 }
 
 // New builds the server; Publish and Run feed its stream.
-func New(cfg Config) *Server { return &Server{cfg: cfg} }
+func New(cfg Config) *Server { return &Server{cfg: cfg, historyReads: make(chan struct{}, 2)} }
 
 // CheckListen refuses addresses reachable from outside the LAN: only an
 // explicit loopback or private address (RFC 1918, RFC 4193) will do. The
@@ -99,7 +103,7 @@ func CheckListen(addr string) error {
 	return nil
 }
 
-// Handler routes /v1. Every route is GET; anything else is 405.
+// Handler serves the live API and the embedded web console.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	quick := func(h http.HandlerFunc) http.Handler {
@@ -114,6 +118,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/targets/{addr}/hops", quick(s.hops))
 	mux.Handle("GET /v1/events", quick(s.events))
 	mux.Handle("GET /v1/stream", s.guard(s.stream)) // long-lived: no timeout handler, it would break flushing
+	if s.cfg.Store != nil {
+		history := func(h http.HandlerFunc) http.Handler {
+			return http.TimeoutHandler(s.guard(h), 30*time.Second, "history request timed out")
+		}
+		mux.Handle("GET /v1/history/targets", quick(s.historyTargets))
+		mux.Handle("GET /v1/history", history(s.history))
+		mux.Handle("GET /v1/captures", quick(s.captures))
+		mux.Handle("POST /v1/captures", history(s.createCapture))
+		mux.Handle("GET /v1/captures/{id}", history(s.getCapture))
+		mux.Handle("GET /v1/captures/{id}/export/{format}", history(s.exportCapture))
+	}
 	mux.Handle("GET /", http.FileServerFS(uiFiles))
 	return headers(mux)
 }
@@ -368,15 +383,16 @@ type roundView struct {
 }
 
 type hopSample struct {
-	TTL   int      `json:"ttl"`
-	Addr  string   `json:"addr,omitempty"`
-	RTTms *float64 `json:"rtt_ms,omitempty"` // absent: no reply, never 0
+	TTL    int      `json:"ttl"`
+	Addr   string   `json:"addr,omitempty"`
+	RTTms  *float64 `json:"rtt_ms,omitempty"` // absent: no reply, never 0
+	Status string   `json:"status,omitempty"`
 }
 
 func (s *Server) roundView(r live.Round, pub bool) roundView {
 	v := roundView{Type: "round", Target: r.Target.String(), N: r.N, Start: r.Start.UTC(), Hops: make([]hopSample, len(r.Samples))}
 	for i, x := range r.Samples {
-		v.Hops[i] = hopSample{TTL: x.TTL, Addr: s.addr(x.From, pub)}
+		v.Hops[i] = hopSample{TTL: x.TTL, Addr: s.addr(x.From, pub), Status: x.Status}
 		if x.RTTms >= 0 {
 			v.Hops[i].RTTms = new(x.RTTms)
 		}
@@ -420,9 +436,20 @@ func (s *Server) hops(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, recs)
 }
 
-func (s *Server) eventView(e model.Event, pub bool) model.Event {
+type routeEventView struct {
+	model.Event
+	ObservedAt time.Time `json:"observed_at,omitzero"`
+}
+
+func (s *Server) eventView(e model.Event, pub bool) routeEventView {
 	e.Before, e.After = s.path(e.Before, pub), s.path(e.After, pub)
-	return e
+	// The detector assigns the time of the provisional change as the ID.
+	// Keep the confirmation's own timestamp as well.
+	first := e.Time
+	if e.ID > 0 && e.ID <= e.Time.UnixNano() {
+		first = time.Unix(0, e.ID).UTC()
+	}
+	return routeEventView{Event: e, ObservedAt: first}
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
@@ -432,11 +459,12 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pub := public(r)
-	evs := s.cfg.Events.Last(n)
-	for i := range evs {
-		evs[i] = s.eventView(evs[i], pub)
+	events := s.cfg.Events.Last(n)
+	views := make([]routeEventView, 0, len(events))
+	for _, event := range events {
+		views = append(views, s.eventView(event, pub))
 	}
-	writeJSON(w, list(evs))
+	writeJSON(w, views)
 }
 
 // sse frames one message: "event: <kind>" and one line of JSON.

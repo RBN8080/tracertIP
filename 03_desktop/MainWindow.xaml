@@ -1,0 +1,197 @@
+<Window
+    x:Class="TracertIP.Desktop.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="tracertIP">
+    <Grid x:Name="Root" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.Resources>
+            <Style x:Key="Card" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="10" />
+                <Setter Property="Padding" Value="15" />
+            </Style>
+            <Style x:Key="SectionTitle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="16" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+            <Style x:Key="Caption" TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+            </Style>
+        </Grid.Resources>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <Border Padding="20,12" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" Background="{ThemeResource LayerFillColorDefaultBrush}">
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="2.4*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                    <FontIcon Glyph="&#xE90F;" FontSize="19" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                    <TextBlock Text="tracertIP" FontSize="21" FontWeight="SemiBold" />
+                </StackPanel>
+                <TextBlock x:Name="Connection" Grid.Column="1" Text="Sin conexión" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+                <TextBox x:Name="Node" Grid.Column="2" PlaceholderText="Dirección del nodo, p. ej. http://nodo:8080"
+                        AutomationProperties.Name="Dirección del nodo" KeyDown="NodeKeyDown" />
+                <Button Grid.Column="3" Content="Conectar" Style="{StaticResource AccentButtonStyle}" Click="ConnectClick" />
+            </Grid>
+        </Border>
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="224" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,1,0" Background="{ThemeResource LayerFillColorDefaultBrush}">
+                <ScrollViewer>
+                    <StackPanel Padding="14,18" Spacing="8">
+                        <ToggleButton x:Name="LiveTab" Content="En vivo" IsChecked="True" HorizontalAlignment="Stretch" Click="LiveClick" />
+                        <ToggleButton x:Name="HistoryTab" Content="Historial" HorizontalAlignment="Stretch" Click="HistoryClick" />
+                        <ToggleButton x:Name="CapturesTab" Content="Capturas" HorizontalAlignment="Stretch" Click="CapturesClick" />
+                        <CheckBox x:Name="PublicView" Content="Vista pública" Margin="0,4,0,0" Click="PrivacyClick" />
+                        <TextBlock Text="Destinos activos" Style="{StaticResource SectionTitle}" Margin="0,12,0,0" />
+                        <TextBox x:Name="TraceAddress" PlaceholderText="IPv4 o IPv6" AutomationProperties.Name="Destino de la traza" KeyDown="TraceKeyDown" />
+                        <Button Content="Trazar" HorizontalAlignment="Stretch" Click="AddClick" />
+                        <ListView x:Name="LiveTargets" AutomationProperties.Name="Destinos activos" SelectionChanged="TargetChanged"
+                                  MaxHeight="235" />
+                        <Button x:Name="StopTrace" Content="Detener traza" HorizontalAlignment="Stretch" IsEnabled="False" Click="RemoveClick" />
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+            <ScrollViewer x:Name="PageScroll" Grid.Column="1" HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Padding="24,19" Spacing="13">
+                    <TextBlock x:Name="Notice" Style="{StaticResource Caption}" AutomationProperties.LiveSetting="Polite" Visibility="Collapsed" />
+                    <StackPanel x:Name="LivePanel" Spacing="12">
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <StackPanel Spacing="3">
+                                <TextBlock Text="Monitor en vivo" Style="{StaticResource TitleTextBlockStyle}" />
+                                <TextBlock x:Name="Origin" Text="Conecta con el nodo de medición." Style="{StaticResource Caption}" />
+                            </StackPanel>
+                            <Button Grid.Column="1" x:Name="InspectLive" Content="Analizar intervalo" Click="InspectClick" IsEnabled="False" VerticalAlignment="Center" />
+                        </Grid>
+                        <Grid ColumnSpacing="9">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border Style="{StaticResource Card}"><StackPanel Spacing="3">
+                                <TextBlock Text="Destino" Style="{StaticResource Caption}" />
+                                <TextBlock x:Name="LiveDestination" Text="—" FontFamily="Consolas" FontSize="17" TextWrapping="Wrap" />
+                                <TextBlock x:Name="LiveState" Style="{StaticResource Caption}" />
+                            </StackPanel></Border>
+                            <Border Grid.Column="1" Style="{StaticResource Card}"><StackPanel Spacing="3">
+                                <TextBlock Text="Latencia mediana" Style="{StaticResource Caption}" />
+                                <TextBlock x:Name="Median" Text="—" FontSize="21" FontFamily="Consolas" />
+                                <TextBlock x:Name="Percentile" Style="{StaticResource Caption}" />
+                            </StackPanel></Border>
+                            <Border Grid.Column="2" Style="{StaticResource Card}"><StackPanel Spacing="3">
+                                <TextBlock Text="Respuesta a las sondas" Style="{StaticResource Caption}" />
+                                <TextBlock x:Name="ReplyRate" Text="—" FontSize="21" FontFamily="Consolas" />
+                                <TextBlock x:Name="LastMeasurement" Style="{StaticResource Caption}" />
+                            </StackPanel></Border>
+                        </Grid>
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="1.7*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <Border Style="{StaticResource Card}"><StackPanel Spacing="6">
+                                <TextBlock Text="Latencia al destino" Style="{StaticResource SectionTitle}" />
+                                <Canvas x:Name="LiveChart" Height="203" SizeChanged="ChartResized" AutomationProperties.Name="Gráfica de latencia en vivo" />
+                                <TextBlock x:Name="LiveChartSummary" Style="{StaticResource Caption}" />
+                            </StackPanel></Border>
+                            <Border Grid.Column="1" Style="{StaticResource Card}"><StackPanel Spacing="6">
+                                <TextBlock Text="Cambios de ruta" Style="{StaticResource SectionTitle}" />
+                                <ListView x:Name="LiveEvents" MaxHeight="187" DisplayMemberPath="Label" AutomationProperties.Name="Cambios de ruta en vivo"
+                                          IsItemClickEnabled="True" ItemClick="LiveEventClick" SelectionMode="None" />
+                            </StackPanel></Border>
+                        </Grid>
+                        <Expander Header="Ruta y saltos" IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                            <ListView x:Name="Hops" MaxHeight="280" SelectionMode="None" AutomationProperties.Name="Saltos de la ruta" />
+                        </Expander>
+                        <Expander Header="Datos de latencia" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Expanding="LiveSamplesExpanding">
+                            <ListView x:Name="LiveSamples" MaxHeight="220" SelectionMode="None" AutomationProperties.Name="Tabla de latencia en vivo" />
+                        </Expander>
+                        <Expander x:Name="HeatExpander" Header="Mapa de calor por salto" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Expanding="HeatExpanding">
+                            <StackPanel Spacing="5">
+                                <Canvas x:Name="HeatChart" Height="180" SizeChanged="ChartResized" AutomationProperties.Name="Mapa de calor por salto" />
+                                <TextBlock Text="TTL en el eje vertical. Gris indica ausencia de respuesta." Style="{StaticResource Caption}" />
+                            </StackPanel>
+                        </Expander>
+                        <Expander Header="Salud del instrumento" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                            <StackPanel Spacing="5">
+                                <TextBlock x:Name="Instrument" Style="{StaticResource Caption}" />
+                                <ListView x:Name="HealthTargets" MaxHeight="220" SelectionMode="None" AutomationProperties.Name="Salud de los destinos" />
+                            </StackPanel>
+                        </Expander>
+                    </StackPanel>
+                    <StackPanel x:Name="HistoryPanel" Spacing="12" Visibility="Collapsed">
+                        <TextBlock Text="Historial" Style="{StaticResource TitleTextBlockStyle}" />
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel Spacing="8">
+                                <ComboBox x:Name="HistoryTarget" Header="Destino" AutomationProperties.Name="Destino del historial" MinWidth="218" />
+                                <StackPanel Orientation="Horizontal" Spacing="12">
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Text="Desde (hora local)" />
+                                        <CalendarDatePicker x:Name="FromDate" AutomationProperties.Name="Fecha inicial" />
+                                        <TimePicker x:Name="FromTime" ClockIdentifier="24HourClock" AutomationProperties.Name="Hora inicial" />
+                                    </StackPanel>
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Text="Hasta (hora local)" />
+                                        <CalendarDatePicker x:Name="ToDate" AutomationProperties.Name="Fecha final" />
+                                        <TimePicker x:Name="ToTime" ClockIdentifier="24HourClock" AutomationProperties.Name="Hora final" />
+                                    </StackPanel>
+                                </StackPanel>
+                                <Button x:Name="ConsultButton" Content="Consultar" Click="ConsultClick" Style="{StaticResource AccentButtonStyle}" />
+                            </StackPanel>
+                        </Border>
+                        <StackPanel x:Name="HistoryResult" Spacing="10" Visibility="Collapsed">
+                            <TextBlock x:Name="HistoryLabel" Style="{StaticResource SectionTitle}" TextWrapping="Wrap" />
+                            <TextBlock x:Name="CaptureNote" Style="{StaticResource Caption}" />
+                            <Border Style="{StaticResource Card}"><StackPanel Spacing="6">
+                                <TextBlock Text="Latencia al destino" Style="{StaticResource SectionTitle}" />
+                                <Canvas x:Name="HistoryChart" Height="202" SizeChanged="ChartResized" AutomationProperties.Name="Gráfica de latencia histórica" />
+                                <TextBlock x:Name="HistoryChartSummary" Style="{StaticResource Caption}" />
+                            </StackPanel></Border>
+                            <Expander Header="Datos de latencia" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Expanding="HistorySamplesExpanding">
+                                <ListView x:Name="HistorySamples" MaxHeight="220" SelectionMode="None" AutomationProperties.Name="Tabla de latencia histórica" />
+                            </Expander>
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="1.4*" /></Grid.ColumnDefinitions>
+                                <Border Style="{StaticResource Card}"><StackPanel Spacing="6">
+                                    <TextBlock Text="Cambios de ruta" Style="{StaticResource SectionTitle}" />
+                                    <ListView x:Name="HistoryEvents" MaxHeight="230" DisplayMemberPath="Label" AutomationProperties.Name="Cambios históricos"
+                                              SelectionChanged="HistoryEventChanged" />
+                                </StackPanel></Border>
+                                <Border Grid.Column="1" Style="{StaticResource Card}"><StackPanel Spacing="6">
+                                    <TextBlock Text="Saltos observados" Style="{StaticResource SectionTitle}" />
+                                    <ListView x:Name="ComparedHops" MaxHeight="230" SelectionMode="None" AutomationProperties.Name="Saltos antes y después" />
+                                </StackPanel></Border>
+                            </Grid>
+                            <StackPanel x:Name="SavePanel" Orientation="Horizontal" Spacing="8">
+                                <TextBox x:Name="Note" PlaceholderText="Nota opcional" AutomationProperties.Name="Nota de la captura" Width="255" MaxLength="300" />
+                                <Button x:Name="SaveButton" Content="Guardar captura" Click="SaveClick" Style="{StaticResource AccentButtonStyle}" />
+                            </StackPanel>
+                            <StackPanel x:Name="Downloads" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                                <Button Content="Descargar PDF" Tag="pdf" Click="DownloadClick" />
+                                <Button Content="Descargar CSV" Tag="csv" Click="DownloadClick" />
+                                <Button Content="Descargar JSONL" Tag="jsonl" Click="DownloadClick" />
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel x:Name="CapturesPanel" Spacing="12" Visibility="Collapsed">
+                        <TextBlock Text="Capturas" Style="{StaticResource TitleTextBlockStyle}" />
+                        <TextBlock Text="Intervalos guardados en el nodo de medición." Style="{StaticResource Caption}" />
+                        <Border Style="{StaticResource Card}">
+                            <ListView x:Name="SavedCaptures" DisplayMemberPath="Label" AutomationProperties.Name="Capturas guardadas"
+                                      IsItemClickEnabled="True" ItemClick="CaptureClick" SelectionMode="None" />
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>

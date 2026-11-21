@@ -130,8 +130,10 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	if *listen != "" {
 		j := &hopJudge{cfg: cfg, opts: enrichOptions(cfg, *bases, "", false, false), known: map[netip.Addr]enrich.Info{}}
 		j.opts.NoCity = true
+		nodeName, _ := os.Hostname()
 		srv = api.New(api.Config{
 			Fleet: fleetView{fleet}, Events: events, Hops: j.hops, Home: asns.home(cfg.AccessASN), AccessASN: cfg.AccessASN,
+			Store: store, ResolveHistory: asns.Resolve, NodeName: nodeName,
 			Hub: api.NewHub(),
 			Node: func() api.Node {
 				t, free := batch.Health(*dir)

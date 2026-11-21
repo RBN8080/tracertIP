@@ -2,7 +2,7 @@
 
 **Live telemetry of the path to an IP.** It shows which networks the traffic crosses, where each hop is, how far it can be, and what physics (the speed of light in fiber) says about it.
 
-> **Status: paused on 2026-10-06, with the live service ready to use.** Phases 1 and 2 are closed. The service starts when the node boots: open its address in a browser on the LAN and type an IP address. A third phase (outside context such as BGP) is not planned. This repository holds only structural material: code, scripts and templates that work on any network.
+The Linux service starts when the node boots. Use the web console from a browser or connect the native Windows client to the same node. This repository holds code, scripts and templates that work on any network.
 
 ## Layout
 
@@ -11,8 +11,9 @@ One folder per piece, in order. Only `01_engine/` is production code; `00_` and 
 | Folder | What it is | Status |
 |---|---|---|
 | `00_verification/` | Study: 48 h of real data and the verdict on whether to build | Closed 2026-09-28 |
-| `01_engine/` | Product: traces and judges every hop, once or live | Phase 1 closed 2026-09-29; Phase 2 closed 2026-10-06 |
+| `01_engine/` | Linux engine, history API and built-in web console | Live monitoring, historical review and captures |
 | `02_observation/` | Study: the engine running untouched for at least 14 days | Rehearsals passed; the 14 days were cancelled on 2026-10-06 |
+| `03_desktop/` | Native Windows client for the Linux service | WinUI 3, x64 |
 
 ## The engine (`01_engine/`)
 
@@ -27,7 +28,21 @@ One binary, `tracertip`, for Linux.
 | `batch` | Traces a target list on fixed UTC slots that alternate IPv4 and IPv6, one target at a time. It replaces failing targets from a reserve, never blames a target for the host's own outages, and writes data that survives a power cut |
 | `serve` | Live telemetry: up to 5 targets, one round every 2 s each, without end. A web view built into the binary, on the LAN only: type an IP address to trace it, and see the judged path, a hop-by-time heat map, RTT, route-change events and the instrument's own health. A public mode hides the home side. History is kept per target and day, compressed, under a disk cap |
 
-`01_engine/deploy/` installs the binary with `CAP_NET_RAW` only, a daily, hardened update of the bases, the live service (`tracertip-live.service`) and a host firewall that opens its port to the LAN only.
+`01_engine/deploy/` installs the binary with `CAP_NET_RAW`, a daily hardened update of the bases, the live service (`tracertip-live.service`) and a host firewall that opens its port to the LAN only.
+
+## Web and Windows console
+
+Open the node's URL in a browser, or launch `tracertIP.exe` on Windows and enter the same base URL. Both clients can add and stop targets, view latency and route changes, and open the recorded rounds before and after a change. Historical queries accept intervals up to 60 minutes and can include targets whose monitoring stopped.
+
+Save an interval as a capture to preserve it on the Linux node after the rolling history expires. Captures include the node, target, timestamps, round observations and route events. Private captures support a note. Public captures omit the node identity, notes and home-side addresses and ASNs. Download a PDF summary, CSV observations and events, or JSON Lines with the capture and its round and event records. The engine's original logs retain the complete probe packets.
+
+Build the native executable from the repository root with the .NET 10 SDK on Windows:
+
+```powershell
+dotnet publish .\03_desktop\tracertIP.csproj -c Release -p:Platform=x64 -o .\bin\windows-x64
+```
+
+The self-contained executable goes in `bin/windows-x64/`. Keep the Linux node reachable while viewing live or saved telemetry. Use a private network or VPN to reach the service remotely.
 
 ## Studies
 
@@ -88,7 +103,3 @@ Not redistributed: each installation downloads or asks for it and accepts its te
 ## License
 
 MIT. See `LICENSE`.
-
----
-
-*Updated: 2026-10-06 01:08 UTC.*

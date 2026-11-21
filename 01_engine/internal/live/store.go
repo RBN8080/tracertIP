@@ -47,6 +47,11 @@ type dayFile struct {
 	f   *os.File
 }
 
+const capturesDir = "captures"
+
+// CapturesDir is outside the rolling history's rotation.
+func (s *Store) CapturesDir() string { return filepath.Join(s.dir, capturesDir) }
+
 // OpenStore prepares dir and compresses days a crash left uncompressed.
 func OpenStore(dir string, capBytes int64, now time.Time) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -58,6 +63,8 @@ func OpenStore(dir string, capBytes int64, now time.Time) (*Store, error) {
 		switch {
 		case err != nil:
 			return err
+		case d.IsDir() && path == filepath.Join(dir, capturesDir):
+			return fs.SkipDir
 		case strings.HasSuffix(path, ".gz.tmp"):
 			return os.Remove(path) // a compression the crash cut short; the .jsonl is still there
 		case strings.HasSuffix(path, ".jsonl") && strings.TrimSuffix(d.Name(), ".jsonl") != today:
@@ -234,6 +241,9 @@ func (s *Store) trim() error {
 	var files []file
 	var total int64
 	err := filepath.WalkDir(s.dir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() && path == filepath.Join(s.dir, capturesDir) {
+			return fs.SkipDir
+		}
 		if err != nil || d.IsDir() {
 			return err
 		}

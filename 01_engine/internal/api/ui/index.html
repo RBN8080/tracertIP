@@ -1,75 +1,152 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tracertIP live</title>
+<title>tracertIP · Telemetría de red</title>
 <link rel="stylesheet" href="app.css">
 <script src="app.js" defer></script>
+<script src="history.js" defer></script>
 </head>
 <body>
-<header>
-  <h1>tracertIP <span class="sub">live</span></h1>
-  <p id="node" class="muted" aria-live="polite">connecting…</p>
-  <label class="toggle"><input type="checkbox" id="public"> public view (home side hidden)</label>
+<a href="#content" class="skip">Saltar al contenido</a>
+<header class="topbar">
+  <div class="brand"><span class="mark" aria-hidden="true">↗</span><span>tracert<strong>IP</strong></span><span class="product">Telemetría de red</span></div>
+  <div class="top-status">
+    <span id="connection" class="connection" data-tone="wait" role="status">Conectando</span>
+    <label class="toggle"><input type="checkbox" id="public"> Vista pública</label>
+  </div>
 </header>
-<main>
-  <form id="search" class="search" autocomplete="off">
-    <label for="ip" class="vh">IP address to trace</label>
-    <input id="ip" name="ip" type="text" spellcheck="false" placeholder="IP address to trace, e.g. 1.1.1.1 or 2606:4700::1111" required>
-    <button type="submit">Trace</button>
-    <span id="msg" role="status" class="muted"></span>
-  </form>
-  <nav aria-label="Targets"><ul id="targets"></ul></nav>
+<div class="workspace">
+  <aside class="sidebar">
+    <nav class="views" aria-label="Vistas">
+      <button type="button" data-view="live" aria-current="page"><span aria-hidden="true">◉</span> En vivo</button>
+      <button type="button" data-view="history"><span aria-hidden="true">◷</span> Historial</button>
+      <button type="button" data-view="captures"><span aria-hidden="true">▤</span> Capturas</button>
+    </nav>
+    <div class="destination-list">
+      <h2>Destinos <span id="target-count" class="count"></span></h2>
+      <form id="search" class="search" autocomplete="off">
+        <label for="ip" class="vh">Dirección IPv4 o IPv6</label>
+        <input id="ip" name="ip" type="text" spellcheck="false" autocapitalize="none" placeholder="IPv4 o IPv6" required>
+        <button class="primary" type="submit">Trazar</button>
+      </form>
+      <p id="msg" class="status-line" role="status"></p>
+      <ul id="targets" aria-label="Destinos en monitoreo"></ul>
+    </div>
+  </aside>
+  <main id="content" tabindex="-1">
+    <section id="live-view" aria-labelledby="live-title">
+      <div class="view-head">
+        <div><h1 id="live-title" tabindex="-1">Monitor en vivo</h1><p class="muted" id="live-origin">Consultando el nodo de medición</p></div>
+        <button type="button" id="inspect-live" disabled>Analizar intervalo</button>
+      </div>
+      <div class="metrics" aria-label="Resumen de los últimos 30 minutos">
+        <div class="metric"><span>Destino</span><strong id="live-target">—</strong><small id="live-state">Selecciona un destino</small></div>
+        <div class="metric"><span>Latencia mediana</span><strong id="live-median">—</strong><small id="live-p95">Percentil 95 —</small></div>
+        <div class="metric"><span>Respuesta a las sondas</span><strong id="live-reply">—</strong><small id="live-sent">En la ventana visible</small></div>
+        <div class="metric"><span>Última muestra</span><strong id="live-last">—</strong><small id="live-age">Esperando mediciones</small></div>
+      </div>
+      <div class="columns">
+        <section class="panel chart-panel" aria-labelledby="live-rtt-title">
+          <div class="panel-head"><h2 id="live-rtt-title">Latencia al destino</h2><span class="tag">Hasta 30 min</span></div>
+          <canvas id="rtt" class="rtt" role="img" aria-label="Latencia de ida y vuelta por hora de medición"></canvas>
+          <p id="summary" class="muted chart-note"></p>
+          <details id="live-samples" class="inline-details">
+            <summary>Ver datos de la gráfica</summary>
+            <div class="scroll" tabindex="0" role="region" aria-label="Mediciones de latencia en vivo"><table>
+              <thead><tr><th scope="col">Hora</th><th scope="col">RTT</th><th scope="col">Estado</th></tr></thead>
+              <tbody id="live-data"></tbody>
+            </table></div>
+          </details>
+        </section>
+        <section class="panel events-panel" aria-labelledby="live-events-title">
+          <div class="panel-head"><h2 id="live-events-title">Cambios de ruta</h2><span class="tag" id="live-event-count">0</span></div>
+          <ol id="events" class="events"></ol>
+        </section>
+      </div>
+      <details class="panel fold" open>
+        <summary>Ruta y saltos</summary>
+        <div class="scroll" tabindex="0" role="region" aria-label="Saltos de la ruta"><table id="hops">
+          <thead><tr><th scope="col">TTL</th><th scope="col">Dirección</th><th scope="col">Red</th><th scope="col">Ubicación estimada</th><th scope="col" class="num">RTT mín.</th><th scope="col">Indicadores</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
+      <details class="panel fold" id="heat-panel">
+        <summary>Mapa de calor por salto</summary>
+        <canvas id="heat" class="heat" role="img" aria-label="Latencia por salto y ronda"></canvas>
+        <p class="muted chart-note">TTL en el eje vertical. Rondas recientes a la derecha. Gris indica ausencia de respuesta.</p>
+      </details>
+      <details class="panel fold">
+        <summary>Salud del instrumento <span id="node" class="muted"></span></summary>
+        <div class="scroll" tabindex="0" role="region" aria-label="Salud de los destinos"><table id="health">
+          <thead><tr><th scope="col">Destino</th><th scope="col">Estado del monitor</th><th scope="col" class="num">Rondas</th><th scope="col" class="num">Con respuesta</th><th scope="col" class="num">Sin respuesta</th><th scope="col" class="num">Sin envío</th><th scope="col" class="num">Sesiones</th><th scope="col" class="num">Retraso</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
+      <details class="panel fold">
+        <summary>Cómo interpretar la ruta</summary>
+        <ul class="reading">
+          <li>Un salto intermedio puede limitar sus respuestas ICMP aunque el destino siga respondiendo.</li>
+          <li>El RTT mide ida y vuelta desde el nodo. La ruta de retorno y la ubicación física son inferencias.</li>
+          <li>Una ubicación incompatible con el límite físico se marca en los indicadores. Con anycast, una IP puede responder desde distintos sitios.</li>
+        </ul>
+      </details>
+    </section>
 
-  <section aria-labelledby="h-path">
-    <h2 id="h-path">Path <span id="latency" class="muted"></span></h2>
-    <div class="scroll"><table id="hops">
-      <thead><tr><th scope="col">TTL</th><th scope="col">Address</th><th scope="col">Network</th>
-        <th scope="col">Location</th><th scope="col" class="num">Min RTT</th><th scope="col">Flags</th></tr></thead>
-      <tbody></tbody>
-    </table></div>
-  </section>
+    <section id="history-view" aria-labelledby="history-title" hidden>
+      <div class="view-head"><div><h1 id="history-title" tabindex="-1">Historial</h1><p class="muted">Consulta las mediciones guardadas por destino y fecha.</p></div></div>
+      <section class="panel filters" aria-label="Intervalo de medición">
+        <form id="history-form">
+          <label>Destino<select id="history-target" required></select></label>
+          <label>Desde <input id="history-from" type="datetime-local" step="1" required></label>
+          <label>Hasta <input id="history-to" type="datetime-local" step="1" required></label>
+          <button class="primary" type="submit" id="history-submit">Consultar</button>
+        </form>
+        <p class="status-line"><span class="muted" id="history-zone"></span> <span id="history-status" role="status"></span></p>
+      </section>
+      <div id="history-result" hidden>
+        <div class="view-head subsection">
+          <div><h2 id="history-result-title"></h2><p class="muted" id="history-result-meta"></p><p class="capture-note" id="history-note" hidden></p></div>
+          <div id="download-actions" class="actions" hidden></div>
+        </div>
+        <div class="columns">
+          <section class="panel chart-panel" aria-labelledby="history-rtt-title">
+            <div class="panel-head"><h2 id="history-rtt-title">Latencia al destino</h2></div>
+            <canvas id="history-rtt" class="rtt" role="img" aria-label="Latencia de ida y vuelta en el intervalo seleccionado"></canvas>
+            <p id="history-summary" class="muted chart-note"></p>
+            <details class="inline-details" id="history-samples">
+              <summary>Ver datos de la gráfica</summary>
+              <div class="scroll" tabindex="0" role="region" aria-label="Mediciones históricas de latencia"><table>
+                <thead><tr><th scope="col">Hora</th><th scope="col">RTT</th><th scope="col">Estado</th></tr></thead>
+                <tbody id="history-data"></tbody>
+              </table></div>
+            </details>
+          </section>
+          <section class="panel events-panel">
+            <div class="panel-head"><h2>Cambios de ruta</h2><span id="history-event-count" class="tag">0</span></div>
+            <ol id="history-events" class="events"></ol>
+          </section>
+        </div>
+        <section class="panel comparison" id="comparison" aria-labelledby="compare-title">
+          <div class="panel-head"><div><h2 id="compare-title">Saltos observados</h2><p class="muted" id="comparison-context"></p></div></div>
+          <div class="compare-grid" id="comparison-grid"></div>
+        </section>
+        <form class="panel save" id="save-capture" hidden>
+          <div><h2>Guardar captura</h2><p class="muted">Conserva el intervalo aunque rote el historial.</p></div>
+          <label id="note-label">Nota opcional<input id="note" type="text" maxlength="300" placeholder="Ej. Incidente de conectividad"></label>
+          <button class="primary" id="save-button" type="submit">Guardar captura</button>
+        </form>
+        <p id="save-status" class="status-line" role="status"></p>
+      </div>
+    </section>
 
-  <section aria-labelledby="h-heat">
-    <h2 id="h-heat">RTT by hop over time</h2>
-    <canvas id="heat" height="260" role="img" aria-label="Heat map of RTT per hop over the last rounds"></canvas>
-    <p class="legend muted"><span class="swatch gap"></span> no reply · color: RTT from 1 ms (dark) to 400 ms or more (bright), log scale · newest on the right</p>
-  </section>
-
-  <section aria-labelledby="h-rtt">
-    <h2 id="h-rtt">Target RTT</h2>
-    <canvas id="rtt" height="180" role="img" aria-label="RTT to the target over the last rounds; route changes marked"></canvas>
-    <p id="summary" class="muted"></p>
-  </section>
-
-  <section aria-labelledby="h-events">
-    <h2 id="h-events">Route changes</h2>
-    <ol id="events" aria-live="polite"></ol>
-  </section>
-
-  <section aria-labelledby="h-health">
-    <h2 id="h-health">Instrument health</h2>
-    <div class="scroll"><table id="health">
-      <thead><tr><th scope="col">Target</th><th scope="col">State</th><th scope="col" class="num">Rounds</th>
-        <th scope="col" class="num">Replied</th><th scope="col" class="num">No reply</th><th scope="col" class="num">Not sent</th>
-        <th scope="col" class="num">Sessions</th><th scope="col" class="num">Lag</th></tr></thead>
-      <tbody></tbody>
-    </table></div>
-  </section>
-
-  <section aria-labelledby="h-rules">
-    <h2 id="h-rules">Reading rules</h2>
-    <ol class="rules">
-      <li><b>R1</b> Loss only at an intermediate hop with a healthy target is that router's ICMP limit, not real loss.</li>
-      <li><b>R2</b> A high RTT at a hop that does not persist in the next ones is a slow router or a different return path, not the bottleneck.</li>
-      <li><b>R3</b> An increase that holds to the end is where the real cost is.</li>
-      <li><b>R4</b> Router name against physics: physics wins.</li>
-      <li><b>R5</b> A hop that does not answer is a gap; the path is not broken.</li>
-      <li><b>R6</b> Anycast never measures the distance to a continent.</li>
-    </ol>
-    <p class="muted">Locations are inferences; the return path is not visible from one vantage point.</p>
-  </section>
-</main>
+    <section id="captures-view" aria-labelledby="captures-title" hidden>
+      <div class="view-head"><div><h1 id="captures-title" tabindex="-1">Capturas</h1><p class="muted">Intervalos guardados en el nodo de medición.</p></div></div>
+      <p id="captures-status" class="status-line" role="status"></p>
+      <ul id="capture-list" class="capture-list"></ul>
+    </section>
+  </main>
+</div>
 </body>
 </html>

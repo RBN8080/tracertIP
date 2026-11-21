@@ -1,320 +1,439 @@
-// tracertIP live view: reads /v1 and the event stream; draws with Canvas.
 "use strict";
 
-const KEEP = 900;          // rounds kept per target: 30 min at one round every 2 s
-const SPACING_MS = 40;     // probe spacing between TTLs (engine default)
-const HOPS_EVERY = 10000;  // the judged path is refreshed this often
+const KEEP = 900;
 const $ = (id) => document.getElementById(id);
+const state = { public: false, selected: null, targets: [], rounds: new Map(), events: [], es: null, epoch: 0, view: "live" };
 
-const state = { public: false, selected: null, targets: [], rounds: {}, events: [], lat: [], es: null };
-
-try { state.public = localStorage.getItem("public") === "1"; } catch (e) { /* storage may be blocked */ }
-if (new URLSearchParams(location.search).get("public") === "1") state.public = true; // a shareable public link
+try { state.public = localStorage.getItem("public") === "1"; } catch { /* storage may be blocked */ }
+if (new URLSearchParams(location.search).get("public") === "1") state.public = true;
 $("public").checked = state.public;
 
-function url(path, params = {}) {
+function apiURL(path, params = {}, pub = state.public) {
   const q = new URLSearchParams(params);
-  if (state.public) q.set("public", "1");
-  const s = q.toString();
-  return "/v1/" + path + (s ? "?" + s : "");
+  if (pub) q.set("public", "1");
+  return "/v1/" + path + (q.size ? "?" + q.toString() : "");
 }
 
-async function getJSON(path, params) {
-  const r = await fetch(url(path, params), { cache: "no-store" });
-  if (!r.ok) throw new Error((await r.text()).trim() || path + ": " + r.status);
+async function api(path, params = {}, options = {}) {
+  const r = await fetch(apiURL(path, params), { cache: "no-store", ...options });
+  if (!r.ok) throw new Error((await r.text()).trim() || "HTTP " + r.status);
   return r.json();
 }
 
-const fmt = (ms) => (ms === undefined || ms === null ? "—" : ms < 10 ? ms.toFixed(2) + " ms" : ms.toFixed(1) + " ms");
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const local = (t) => new Date(t).toLocaleTimeString();
-
-function el(tag, attrs = {}, html = "") {
-  const e = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-  e.innerHTML = html;
-  return e;
+function el(tag, attrs = {}, content = "") {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value !== undefined) node.setAttribute(key, value);
+  }
+  node.textContent = content;
+  return node;
 }
 
-// --- targets -------------------------------------------------------------
+function tableRow(values, classes = []) {
+  const row = el("tr");
+  values.forEach((value, i) => row.append(el("td", { class: classes[i] }, value)));
+  return row;
+}
+
+const shortTime = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const dateTime = (t) => new Date(t).toLocaleString();
+const fmt = (ms) => ms == null ? "—" : (ms < 10 ? ms.toFixed(2) : ms.toFixed(1)) + " ms";
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const monitorLabel = { measuring: "Midiendo", "no route": "Sin ruta desde el nodo", "no socket": "Sin socket de medición", dark: "El nodo no pudo enviar sondas" };
+const eventLabel = { confirmed: "Confirmado", provisional: "Provisional", dropped: "Descartado" };
+const eventKey = (e) => [e.target, e.time, e.id, e.state].join("|");
+
+function switchView(view, focus = true) {
+  state.view = view;
+  for (const button of document.querySelectorAll("[data-view]")) {
+    if (button.dataset.view === view) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+    $(button.dataset.view + "-view").hidden = button.dataset.view !== view;
+  }
+  if (focus) $(view + "-title").focus();
+  document.dispatchEvent(new CustomEvent("view-changed", { detail: view }));
+  if (view === "live") queueDraw();
+}
+for (const button of document.querySelectorAll("[data-view]")) {
+  button.addEventListener("click", () => switchView(button.dataset.view));
+}
+
+function say(text, error = false) {
+  $("msg").textContent = text;
+  $("msg").classList.toggle("error", error);
+}
+
+function connection(text, tone) {
+  const status = $("connection");
+  if (status.textContent !== text) status.textContent = text;
+  status.dataset.tone = tone;
+}
 
 function drawTargets() {
   const ul = $("targets");
+  const signature = JSON.stringify([state.selected, state.targets]);
+  if (signature === ul.dataset.signature) return;
+  ul.dataset.signature = signature;
+  const focused = ul.contains(document.activeElement) ? document.activeElement.dataset.key : null;
   ul.replaceChildren();
-  if (!state.targets.length) {
-    ul.append(el("li", { class: "empty" }, "No targets yet: type an IPv4 or IPv6 address above to see its path live (up to 5 at once)."));
-  }
+  $("target-count").textContent = state.targets.length === 1 ? "1 activo" : state.targets.length ? state.targets.length + " activos" : "";
+  if (!state.targets.length) ul.append(el("li", { class: "empty" }, "Agrega una IP para iniciar una traza."));
   for (const t of state.targets) {
-    const last = t.last || {};
-    const b = el("button", { type: "button", class: "pick", "aria-pressed": String(t.target === state.selected) },
-      `<span class="dot ${esc((t.state || "").replace(" ", "-"))}"></span>${esc(t.target)}<br>` +
-      `<span class="small">min ${fmt(last.min_ms)} · p50 ${fmt(last.p50_ms)} · p95 ${fmt(last.p95_ms)} · loss ${last.loss_pct === undefined ? "—" : last.loss_pct.toFixed(0) + " %"}</span>`);
-    b.addEventListener("click", () => select(t.target));
-    const x = el("button", { type: "button", class: "remove", "aria-label": "Stop tracing " + t.target, title: "Stop tracing" }, "×");
-    x.addEventListener("click", () => removeTarget(t.target));
-    const li = el("li");
-    li.append(b, x);
-    ul.append(li);
+    const b = el("button", { type: "button", class: "pick", "aria-pressed": String(t.target === state.selected), "data-key": "pick " + t.target });
+    b.append(el("strong", {}, t.target), el("small", {}, [monitorLabel[t.state] || t.state, t.last?.p50_ms != null ? fmt(t.last.p50_ms) : ""].filter(Boolean).join(" · ")));
+    b.addEventListener("click", () => {
+      switchView("live", false);
+      select(t.target);
+    });
+    const x = el("button", { type: "button", class: "remove", "data-key": "remove " + t.target, "aria-label": "Detener traza de " + t.target }, "×");
+    x.addEventListener("click", () => removeTarget(t.target).catch((err) => say(err.message, true)));
+    const row = el("li");
+    row.append(b, x);
+    ul.append(row);
   }
+  if (focused) Array.from(ul.querySelectorAll("button")).find((b) => b.dataset.key === focused)?.focus({ preventScroll: true });
 }
 
-async function refreshTargets() {
-  state.targets = (await getJSON("targets")) || [];
-  if (state.selected && !state.targets.some((t) => t.target === state.selected)) state.selected = null;
-  if (!state.selected && state.targets.length) state.selected = state.targets[0].target;
+async function refreshTargets(epoch = state.epoch) {
+  const targets = await api("targets");
+  if (epoch !== state.epoch) return;
+  state.targets = targets;
+  if (!targets.some((t) => t.target === state.selected)) select(targets[0]?.target || null);
   drawTargets();
 }
 
-function say(text, error) {
-  $("msg").textContent = text;
-  $("msg").className = error ? "error" : "muted";
+async function refreshRounds(target, epoch) {
+  const path = "targets/" + encodeURIComponent(target) + "/rounds";
+  const rounds = await api(path, { n: KEEP });
+  if (epoch !== state.epoch || target !== state.selected) return;
+  const unique = new Map();
+  for (const r of [...rounds, ...state.rounds.get(target) || []]) unique.set(r.start + "|" + r.n, r);
+  state.rounds.set(target, Array.from(unique.values()).sort((a, b) => Date.parse(a.start) - Date.parse(b.start)).slice(-KEEP));
+  queueDraw();
 }
 
-// Adding a target is a change on the node: plain JSON to this server, never
-// through the public flag (which only shapes what is read).
+function select(target) {
+  const changed = target !== state.selected;
+  state.selected = target;
+  if (changed) $("hops").tBodies[0].replaceChildren();
+  drawTargets();
+  queueDraw();
+  if (!target) return;
+  const epoch = state.epoch;
+  refreshRounds(target, epoch).catch(() => {});
+  refreshHops(target, epoch).catch(() => {});
+}
+
+async function refreshHops(target = state.selected, epoch = state.epoch) {
+  if (!target) return;
+  const recs = await api("targets/" + encodeURIComponent(target) + "/hops");
+  if (epoch !== state.epoch || target !== state.selected) return;
+  const rows = recs.map((r) => {
+    const inf = r.info || {};
+    let net = "";
+    if (r.home) net = "Red de acceso";
+    else if (inf.ixp) net = "IXP " + (inf.ixp.name || "");
+    else if (inf.as?.length) net = "AS" + inf.as[0].asn + " " + (inf.as[0].name || "");
+    else if (inf.class && inf.class !== "public") net = inf.class;
+    const loc = r.location ? r.location.city + ", " + r.location.country + (r.location.weak ? "?" : "") + " [" + r.location.source + "]" : "—";
+    return tableRow([r.ttl, r.home ? "Oculta" : r.addr || "—", net, loc, r.min_rtt_ms < 0 ? "—" : fmt(r.min_rtt_ms), (r.flags || []).join(" ")],
+      ["num", "address", "", "loc", "num", "flags"]);
+  });
+  $("hops").tBodies[0].replaceChildren(...rows);
+}
+
 async function addTarget(ip) {
-  const r = await fetch("/v1/targets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target: ip }) });
-  if (!r.ok) { say((await r.text()).trim() || "could not add " + ip, true); return; }
-  const added = (await r.json()).target;
-  say(`tracing ${added}: the first round takes a few seconds`);
+  const added = await api("targets", {}, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target: ip }),
+  });
   $("ip").value = "";
+  say("Traza iniciada. La primera ronda puede tardar unos segundos.");
   await refreshTargets();
-  await select(added);
-  setTimeout(() => refreshHops().catch(() => {}), 3000);
+  if (state.targets.some((t) => t.target === added.target)) {
+    switchView("live", false);
+    select(added.target);
+  }
 }
 
 async function removeTarget(ip) {
-  const r = await fetch("/v1/targets/" + encodeURIComponent(ip), { method: "DELETE" });
-  if (!r.ok && r.status !== 404) { say((await r.text()).trim() || "could not remove " + ip, true); return; }
-  say(`stopped tracing ${ip}`);
-  delete state.rounds[ip];
+  const r = await fetch(apiURL("targets/" + encodeURIComponent(ip)), { method: "DELETE" });
+  if (!r.ok && r.status !== 404) throw new Error((await r.text()).trim());
+  state.rounds.delete(ip);
+  say("Traza detenida. Las mediciones siguen en Historial mientras dure su retención.");
   await refreshTargets();
-  await select(state.selected);
 }
 
-function clearPanels() {
-  $("hops").tBodies[0].replaceChildren();
-  $("summary").textContent = "";
-  $("latency").textContent = "";
-  draw();
-}
-
-async function select(target) {
-  state.selected = target;
-  drawTargets();
-  if (!target) { clearPanels(); return; }
-  state.rounds[target] = (await getJSON(`targets/${encodeURIComponent(target)}/rounds`, { n: KEEP })) || [];
-  await refreshHops();
-  draw();
-}
-
-// --- judged path ---------------------------------------------------------
-
-async function refreshHops() {
-  if (!state.selected) return;
-  if (!state.targets.some((t) => t.target === state.selected)) return;
-  const recs = await getJSON(`targets/${encodeURIComponent(state.selected)}/hops`);
-  const tb = $("hops").tBodies[0];
-  tb.replaceChildren();
-  for (const r of recs) {
-    const inf = r.info || {};
-    let net = "";
-    if (r.home) net = "[home]";
-    else if (inf.ixp) net = "IXP " + (inf.ixp.name || "");
-    else if (inf.as && inf.as.length) net = "AS" + inf.as[0].asn + " " + (inf.as[0].name || "");
-    else if (inf.class && inf.class !== "public") net = inf.class;
-    const loc = r.location ? `${r.location.city}, ${r.location.country}${r.location.weak ? "?" : ""} [${r.location.source}]` : "";
-    tb.append(el("tr", {}, `<td class="num">${r.ttl}</td><td>${esc(r.home ? "" : r.addr || "*")}</td><td>${esc(net)}</td>` +
-      `<td class="loc">${esc(loc)}</td><td class="num">${r.min_rtt_ms < 0 ? "*" : fmt(r.min_rtt_ms)}</td><td class="flags">${esc((r.flags || []).join(" "))}</td>`));
+function roundMeasurement(r) {
+  let best = null;
+  let sent = false;
+  for (const p of r.hops) {
+    sent ||= p.status !== "send_error";
+    if (p.addr === r.target && p.rtt_ms != null && (best == null || p.rtt_ms < best)) best = p.rtt_ms;
   }
+  return { rtt: best, sent };
 }
 
-// --- canvases ------------------------------------------------------------
+function metrics(rounds) {
+  const samples = rounds.map(roundMeasurement);
+  const rtts = samples.map((s) => s.rtt).filter((v) => v != null).sort((a, b) => a - b);
+  const nth = (q) => rtts[Math.ceil(q * rtts.length) - 1];
+  return { samples, replies: rtts.length, sent: samples.filter((s) => s.sent).length, p50: nth(.5), p95: rtts.length >= 59 ? nth(.95) : undefined };
+}
 
-function sized(canvas) {
+function drawMeasurementRows(id, rounds) {
+  const parent = $(id);
+  const details = parent.closest("details");
+  if (!details.open) return;
+  const rows = rounds.slice().reverse().map((r) => {
+    const m = roundMeasurement(r);
+    return tableRow([dateTime(r.start), fmt(m.rtt), m.rtt != null ? "Con respuesta" : m.sent ? "Sin respuesta del destino" : "Ronda sin envío"]);
+  });
+  if (!rows.length) rows.push(tableRow(["Sin rondas registradas", "—", "—"]));
+  parent.replaceChildren(...rows);
+}
+
+function sizeCanvas(canvas) {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return null;
   const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth, h = canvas.height / (canvas.dataset.dpr || 1);
-  canvas.dataset.dpr = dpr;
-  canvas.width = Math.round(w * dpr);
-  canvas.height = Math.round(h * dpr);
+  const pixelsW = Math.round(w * dpr), pixelsH = Math.round(h * dpr);
+  if (canvas.width !== pixelsW) canvas.width = pixelsW;
+  if (canvas.height !== pixelsH) canvas.height = pixelsH;
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
   return { ctx, w, h };
 }
 
-const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-
-// Perceptual ramp (viridis stops); t in [0, 1].
-const STOPS = [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]];
-function ramp(t) {
-  t = Math.max(0, Math.min(1, t)) * (STOPS.length - 1);
-  const i = Math.min(STOPS.length - 2, Math.floor(t)), f = t - i;
-  const c = STOPS[i].map((v, k) => Math.round(v + (STOPS[i + 1][k] - v) * f));
-  return `rgb(${c[0]},${c[1]},${c[2]})`;
+function latencyChart(canvas, rounds, events, from, to, selectedEvent) {
+  const surface = sizeCanvas(canvas);
+  if (!surface) return;
+  const { ctx, w, h } = surface;
+  const values = rounds.map(roundMeasurement).map((s) => s.rtt);
+  const valid = values.filter((v) => v != null);
+  const x0 = 48, x1 = w - 17, y0 = 18, y1 = h - 30;
+  const high = Math.max(5, Math.ceil(Math.max(0, ...valid) / 5) * 5);
+  const x = (t) => x0 + (t - from) / Math.max(1, to - from) * (x1 - x0);
+  const y = (v) => y1 - v / high * (y1 - y0);
+  ctx.font = "11px system-ui";
+  ctx.textAlign = "left";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = css("--muted");
+  ctx.strokeStyle = css("--grid");
+  for (let i = 0; i <= 4; i++) {
+    const v = i * high / 4, yy = y(v);
+    ctx.beginPath(); ctx.moveTo(x0, yy); ctx.lineTo(x1, yy); ctx.stroke();
+    ctx.fillText(Math.round(v) + (i === 4 ? " ms" : ""), 9, yy + 3);
+  }
+  for (let i = 0; i <= 4; i++) {
+    const tick = i / 4, t = from + (to - from) * tick;
+    ctx.textAlign = i === 0 ? "left" : i === 4 ? "right" : "center";
+    ctx.fillText(new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), x(t), h - 9);
+  }
+  ctx.textAlign = "center";
+  if (!valid.length) ctx.fillText(rounds.length ? "Sin respuestas del destino" : "Sin mediciones en el intervalo", (x0 + x1) / 2, (y0 + y1) / 2);
+  for (const e of events) {
+    const at = Date.parse(e.time);
+    if (e.state === "dropped" || at < from || at > to) continue;
+    const xx = x(at);
+    ctx.strokeStyle = css(e.state === "confirmed" ? "--bad" : "--warn");
+    ctx.lineWidth = eventKey(e) === selectedEvent ? 3 : 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(xx, y0); ctx.lineTo(xx, y1); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.strokeStyle = ctx.fillStyle = css("--accent");
+  ctx.lineWidth = 1.7;
+  let previous = 0;
+  let pen = false;
+  ctx.beginPath();
+  values.forEach((v, i) => {
+    const t = Date.parse(rounds[i].start);
+    if (v == null) { pen = false; return; }
+    const xx = x(t), yy = y(v);
+    if (pen && t - previous < 7000) ctx.lineTo(xx, yy);
+    else { ctx.moveTo(xx, yy); ctx.lineTo(xx + 1, yy); }
+    pen = true;
+    previous = t;
+  });
+  ctx.stroke();
 }
-const rttColor = (ms) => ramp(Math.log10(Math.max(1, ms)) / Math.log10(400));
 
-function drawHeat() {
-  const rounds = state.rounds[state.selected] || [];
-  const { ctx, w, h } = sized($("heat"));
-  ctx.clearRect(0, 0, w, h);
-  if (!rounds.length) return;
+const HEAT = [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]];
+function heatColor(ms) {
+  const pos = Math.max(0, Math.min(1, Math.log10(Math.max(1, ms)) / Math.log10(400))) * (HEAT.length - 1);
+  const i = Math.min(HEAT.length - 2, Math.floor(pos));
+  const color = HEAT[i].map((a, j) => Math.round(a + (HEAT[i + 1][j] - a) * (pos - i)));
+  return "rgb(" + color.join(",") + ")";
+}
+
+function drawHeat(rounds) {
+  if (!$("heat-panel").open) return;
+  const surface = sizeCanvas($("heat"));
+  if (!surface || !rounds.length) return;
+  const { ctx, w, h } = surface;
   let maxTTL = 1;
   for (const r of rounds) for (const p of r.hops) maxTTL = Math.max(maxTTL, p.ttl);
-  const left = 28, cw = (w - left) / rounds.length, ch = h / maxTTL;
-  ctx.fillStyle = css("--muted");
+  const cw = (w - 33) / rounds.length, ch = h / maxTTL, gap = css("--gap");
   ctx.font = "11px system-ui";
-  for (let t = 1; t <= maxTTL; t += Math.max(1, Math.round(maxTTL / 8))) ctx.fillText(String(t), 2, t * ch - ch / 2 + 4);
+  ctx.fillStyle = css("--muted");
+  for (let t = 1; t <= maxTTL; t += Math.max(1, Math.round(maxTTL / 8))) ctx.fillText(String(t), 8, t * ch - ch / 2 + 4);
   rounds.forEach((r, i) => {
     for (const p of r.hops) {
-      ctx.fillStyle = p.rtt_ms === undefined ? css("--gap") : rttColor(p.rtt_ms);
-      ctx.fillRect(left + i * cw, (p.ttl - 1) * ch, Math.ceil(cw), Math.ceil(ch));
+      ctx.fillStyle = p.rtt_ms == null ? gap : heatColor(p.rtt_ms);
+      ctx.fillRect(30 + i * cw, (p.ttl - 1) * ch, Math.ceil(cw), Math.ceil(ch));
     }
   });
 }
 
-function targetRTT(r) {
-  let best;
-  for (const p of r.hops) if (p.addr === r.target && p.rtt_ms !== undefined && (best === undefined || p.rtt_ms < best)) best = p.rtt_ms;
-  return best;
+function drawEvents(id, counter, events, choose, selected = "") {
+  const container = $(id);
+  const shown = events.slice().reverse();
+  const signature = JSON.stringify([shown, selected]);
+  if (container.dataset.signature === signature) return;
+  container.dataset.signature = signature;
+  const focused = container.contains(document.activeElement) ? document.activeElement.dataset.key : null;
+  const items = shown.map((e) => {
+    const key = eventKey(e);
+    const button = el("button", { class: "event", type: "button", "data-key": key, "aria-pressed": selected ? String(key === selected) : undefined });
+    const label = el("span", { class: "state-" + e.state }, eventLabel[e.state] || e.state);
+    const change = [...(e.before_as || [])].map((n) => "AS" + n).join(" › ") + " → " + [...(e.after_as || [])].map((n) => "AS" + n).join(" › ");
+    button.append(label, el("time", { datetime: e.time }, shortTime(e.time)), el("small", {}, "TTL " + e.ttl + " · " + change));
+    button.addEventListener("click", () => choose(e));
+    const row = el("li");
+    row.append(button);
+    return row;
+  });
+  if (!items.length) items.push(el("li", { class: "empty" }, "Sin cambios registrados."));
+  container.replaceChildren(...items);
+  if (focused) Array.from(container.querySelectorAll("button")).find((b) => b.dataset.key === focused)?.focus({ preventScroll: true });
+  $(counter).textContent = events.length;
 }
 
-function drawRTT() {
-  const rounds = state.rounds[state.selected] || [];
-  const { ctx, w, h } = sized($("rtt"));
-  ctx.clearRect(0, 0, w, h);
-  const ys = rounds.map(targetRTT);
-  const vals = ys.filter((v) => v !== undefined);
-  if (!vals.length) { $("summary").textContent = "no reply from the target in this window"; return; }
-  let lo = Math.min(...vals), hi = Math.max(...vals);
-  if (hi - lo < 1) { lo -= 0.5; hi += 0.5; }
-  const pad = 18, x = (i) => (i / Math.max(1, rounds.length - 1)) * (w - 50) + 45, y = (v) => h - pad - ((v - lo) / (hi - lo)) * (h - 2 * pad);
-  ctx.fillStyle = css("--muted");
-  ctx.font = "11px system-ui";
-  ctx.fillText(fmt(hi), 2, pad);
-  ctx.fillText(fmt(lo), 2, h - pad);
-  // route changes of this target in the window
-  const t0 = rounds.length ? Date.parse(rounds[0].start) : 0, t1 = rounds.length ? Date.parse(rounds[rounds.length - 1].start) : 0;
-  for (const e of state.events) {
-    const t = Date.parse(e.time);
-    if (e.target !== state.selected || e.state === "dropped" || t < t0 || t > t1 || t1 === t0) continue;
-    const xe = 45 + ((t - t0) / (t1 - t0)) * (w - 50);
-    ctx.strokeStyle = e.state === "confirmed" ? css("--bad") : css("--warn");
-    ctx.setLineDash([4, 3]);
-    ctx.beginPath(); ctx.moveTo(xe, 0); ctx.lineTo(xe, h); ctx.stroke();
-    ctx.setLineDash([]);
-  }
-  ctx.strokeStyle = css("--accent");
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  let pen = false;
-  ys.forEach((v, i) => {
-    if (v === undefined) { pen = false; return; } // a gap stays a gap, never 0
-    pen ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v));
-    pen = true;
-  });
-  ctx.stroke();
-  const s = [...vals].sort((a, b) => a - b), q = (p) => s[Math.max(0, Math.ceil(p * s.length) - 1)];
-  $("summary").textContent = `${vals.length} of ${rounds.length} rounds answered · min ${fmt(s[0])} · median ${fmt(q(0.5))}` +
-    (s.length >= 59 ? ` · p95 ${fmt(q(0.95))}` : " · p95 needs 59 samples");
+function renderLive() {
+  const rounds = state.rounds.get(state.selected) || [];
+  const target = state.targets.find((t) => t.target === state.selected);
+  const events = state.events.filter((e) => e.target === state.selected);
+  const m = metrics(rounds);
+  const last = rounds.at(-1), end = last ? Date.parse(last.start) : Date.now();
+  const age = last ? Math.max(0, Math.round((Date.now() - end) / 1000)) : null;
+  $("live-origin").textContent = "Nodo de medición · " + (state.public ? "Vista pública" : location.host);
+  $("live-target").textContent = target?.target || "—";
+  $("live-state").textContent = !target ? "Selecciona un destino" : monitorLabel[target.state] || target.state;
+  $("live-median").textContent = fmt(m.p50);
+  $("live-p95").textContent = "Percentil 95 " + fmt(m.p95);
+  $("live-reply").textContent = m.sent ? Math.round(100 * m.replies / m.sent) + " %" : "—";
+  $("live-sent").textContent = m.sent ? m.replies + " de " + m.sent + " rondas con envío" : "Sin rondas con envío";
+  $("live-last").textContent = last ? shortTime(last.start) : "—";
+  $("live-age").textContent = age == null ? "Esperando mediciones" : age > 15 ? "Datos sin actualizar · hace " + age + " s" : "Hace " + age + " s";
+  $("inspect-live").disabled = !target;
+  const start = rounds.length ? Math.min(end - 60000, Date.parse(rounds[0].start)) : end - 60000;
+  latencyChart($("rtt"), rounds, events, start, end + 2000);
+  drawHeat(rounds);
+  $("summary").textContent = !rounds.length ? "Las rondas aparecerán al comenzar la medición."
+    : rounds.length + " rondas registradas · " + (rounds.length - m.sent) + " sin envío. Las líneas punteadas marcan cambios de ruta.";
+  drawMeasurementRows("live-data", rounds);
+  drawEvents("events", "live-event-count", events.slice(-30), (event) => document.dispatchEvent(new CustomEvent("inspect-event", { detail: event })));
 }
 
 let pending = false;
-function draw() {
-  if (pending) return;
+function queueDraw() {
+  if (pending || state.view !== "live") return;
   pending = true;
-  requestAnimationFrame(() => { pending = false; drawHeat(); drawRTT(); });
-}
-
-// --- events and health ---------------------------------------------------
-
-function drawEvents() {
-  const ol = $("events");
-  ol.replaceChildren();
-  const shown = state.events.slice(-50).reverse();
-  if (!shown.length) ol.append(el("li", { class: "muted" }, "none yet"));
-  for (const e of shown) {
-    const rtt = e.rtt_before_ms !== undefined || e.rtt_after_ms !== undefined ? ` · RTT ${fmt(e.rtt_before_ms)} → ${fmt(e.rtt_after_ms)}` : "";
-    ol.append(el("li", {}, `${esc(local(e.time))} <b>${esc(e.target)}</b> <span class="state-${esc(e.state)}">${esc(e.state)}</span>` +
-      ` at TTL ${e.ttl}: AS ${esc((e.before_as || []).join(" › "))} → ${esc((e.after_as || []).join(" › "))}${rtt}`));
-  }
+  requestAnimationFrame(() => { pending = false; if (state.view === "live") renderLive(); });
 }
 
 function drawHealth(hv) {
   const n = hv.node || {};
-  $("node").textContent = `node ${n.version || "?"} · clock ${n.clock_synced ? "synced" : "NOT synced"}` +
-    (n.temp_c ? ` · ${n.temp_c.toFixed(1)} °C` : "") + (n.disk_free_mb ? ` · ${(n.disk_free_mb / 1024).toFixed(0)} GiB free` : "") +
-    (n.rss_mb ? ` · ${n.rss_mb} MB in memory` : "");
-  const tb = $("health").tBodies[0];
-  tb.replaceChildren();
+  $("node").textContent = [n.version, n.clock_synced ? "Reloj sincronizado" : "Reloj sin sincronizar",
+    n.temp_c ? n.temp_c.toFixed(1) + " °C" : "", n.disk_free_mb ? (n.disk_free_mb / 1024).toFixed(1) + " GiB libres" : ""].filter(Boolean).join(" · ");
+  const rows = [];
   for (const t of hv.targets || []) {
-    tb.append(el("tr", {}, `<td>${esc(t.target)}</td><td><span class="dot ${esc(t.state.replace(" ", "-"))}"></span>${esc(t.state)}` +
-      `${t.error ? ' <span class="small">' + esc(t.error) + "</span>" : ""}</td><td class="num">${t.rounds}</td><td class="num">${t.replied}</td>` +
-      `<td class="num">${t.no_reply}</td><td class="num">${t.send_errors}</td><td class="num">${t.sessions}</td><td class="num">${Math.round(t.lag_ms)} ms</td>`));
-    const tt = state.targets.find((x) => x.target === t.target);
-    if (tt) tt.state = t.state;
+    rows.push(tableRow([t.target, (monitorLabel[t.state] || t.state) + (!state.public && t.error ? " · " + t.error : ""), t.rounds,
+      t.replied, t.no_reply, t.send_errors, t.sessions, Math.round(t.lag_ms) + " ms"], ["address", "", "num", "num", "num", "num", "num", "num"]));
+    const entry = state.targets.find((x) => x.target === t.target);
+    if (entry) entry.state = t.state;
   }
+  $("health").tBodies[0].replaceChildren(...rows);
+  drawTargets();
+  queueDraw();
 }
 
-// Screen latency: from the last reply of a round (send time estimated from
-// the TTL and the spacing, plus its RTT) to now.
-function noteLatency(r) {
-  let lastReply = 0;
-  const t0 = Date.parse(r.start);
-  for (const p of r.hops) if (p.rtt_ms !== undefined) lastReply = Math.max(lastReply, t0 + (p.ttl - 1) * SPACING_MS + p.rtt_ms);
-  if (!lastReply) return;
-  state.lat.push((Date.now() - lastReply) / 1000);
-  if (state.lat.length > 150) state.lat.shift();
-  const s = [...state.lat].sort((a, b) => a - b);
-  $("latency").textContent = `· on screen ${s[Math.floor(s.length / 2)].toFixed(1)} s after the last reply (median of ${s.length}; max ${s[s.length - 1].toFixed(1)} s)`;
+async function refreshLive(epoch) {
+  const events = await api("events", { n: 1000 });
+  if (epoch !== state.epoch) return;
+  const merged = new Map();
+  for (const e of [...events, ...state.events]) merged.set(eventKey(e), e);
+  state.events = Array.from(merged.values()).sort((a, b) => Date.parse(a.time) - Date.parse(b.time)).slice(-1000);
+  await refreshTargets(epoch);
+  if (epoch === state.epoch && state.selected) select(state.selected);
+  queueDraw();
 }
-
-// --- stream --------------------------------------------------------------
 
 function connect() {
-  if (state.es) state.es.close();
-  state.es = new EventSource(url("stream"));
-  state.es.addEventListener("round", (m) => {
-    const r = JSON.parse(m.data);
-    const buf = (state.rounds[r.target] ||= []);
-    buf.push(r);
-    if (buf.length > KEEP) buf.shift();
-    if (r.target === state.selected) { noteLatency(r); draw(); }
+  const epoch = ++state.epoch;
+  state.es?.close();
+  state.rounds.clear();
+  state.targets = [];
+  state.selected = null;
+  state.events = [];
+  $("hops").tBodies[0].replaceChildren();
+  $("health").tBodies[0].replaceChildren();
+  $("live-data").replaceChildren();
+  $("events").replaceChildren();
+  delete $("events").dataset.signature;
+  $("node").textContent = "";
+  $("live-origin").textContent = "Nodo de medición · " + (state.public ? "Vista pública" : location.host);
+  drawTargets();
+  queueDraw();
+  connection("Conectando", "wait");
+  const es = new EventSource(apiURL("stream"));
+  state.es = es;
+  const on = (event, fn) => es.addEventListener(event, (m) => { if (epoch === state.epoch) fn(m); });
+  on("open", () => {
+    connection("En línea", "ok");
+    refreshLive(epoch).catch((err) => { if (epoch === state.epoch) say(err.message, true); });
   });
-  state.es.addEventListener("event", (m) => {
+  on("round", (m) => {
+    const r = JSON.parse(m.data);
+    if (!state.rounds.has(r.target)) state.rounds.set(r.target, []);
+    const list = state.rounds.get(r.target);
+    if (list.at(-1)?.start !== r.start || list.at(-1)?.n !== r.n) list.push(r);
+    if (list.length > KEEP) list.shift();
+    if (r.target === state.selected) queueDraw();
+  });
+  on("event", (m) => {
     state.events.push(JSON.parse(m.data));
     if (state.events.length > 1000) state.events.shift();
-    drawEvents();
-    draw();
+    queueDraw();
   });
-  state.es.addEventListener("health", (m) => drawHealth(JSON.parse(m.data)));
-  state.es.addEventListener("targets", () => { refreshTargets().then(() => select(state.selected)).catch(() => {}); });
-  state.es.onerror = () => { $("node").textContent = "stream lost; the browser reconnects…"; };
+  on("health", (m) => drawHealth(JSON.parse(m.data)));
+  on("targets", () => refreshTargets(epoch).catch(() => {}));
+  on("error", () => connection(es.readyState === EventSource.CLOSED ? "Desconectado" : "Reconectando", "error"));
+  refreshLive(epoch).catch((e) => {
+    if (epoch === state.epoch) say(e.message, true);
+  });
 }
 
-async function start() {
-  state.rounds = {};
-  state.lat = [];
-  await refreshTargets();
-  state.events = (await getJSON("events", { n: 1000 })) || [];
-  drawEvents();
-  drawHealth(await getJSON("health"));
-  connect();
-  await select(state.selected);
-  if (!state.targets.length) $("ip").focus();
-}
-
-$("search").addEventListener("submit", (e) => {
-  e.preventDefault();
+$("search").addEventListener("submit", (event) => {
+  event.preventDefault();
   const ip = $("ip").value.trim();
   if (ip) addTarget(ip).catch((err) => say(err.message, true));
 });
-$("public").addEventListener("change", (e) => {
-  state.public = e.target.checked;
-  try { localStorage.setItem("public", state.public ? "1" : "0"); } catch (err) { /* blocked */ }
-  start().catch(failed);
+$("public").addEventListener("change", (event) => {
+  state.public = event.target.checked;
+  try { localStorage.setItem("public", state.public ? "1" : "0"); } catch { /* storage may be blocked */ }
+  say("");
+  connect();
+  document.dispatchEvent(new Event("privacy-changed"));
 });
-window.addEventListener("resize", draw);
-setInterval(() => { refreshHops().catch(() => {}); refreshTargets().catch(() => {}); }, HOPS_EVERY);
-const failed = (e) => { $("node").textContent = "cannot load: " + e.message; };
-start().catch(failed);
+$("heat-panel").addEventListener("toggle", queueDraw);
+$("live-samples").addEventListener("toggle", queueDraw);
+new ResizeObserver(queueDraw).observe($("rtt"));
+matchMedia("(prefers-color-scheme: light)").addEventListener("change", queueDraw);
+setInterval(queueDraw, 1000);
+setInterval(() => {
+  refreshHops().catch(() => {});
+  refreshTargets().catch(() => {});
+}, 12000);
+connect();

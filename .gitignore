@@ -16,3 +16,5 @@ datos/
 00_verification/analysis/analysis
 /tracertip
 /bin/
+/03_desktop/bin/
+/03_desktop/obj/
