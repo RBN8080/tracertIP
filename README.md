@@ -32,7 +32,11 @@ One binary, `tracertip`, for Linux.
 
 ## Web and Windows console
 
-Open the node's URL in a browser, or launch `tracertIP.exe` on Windows and enter the same base URL. Both clients can add and stop targets, view latency and route changes, and open the recorded rounds before and after a change. Historical queries accept intervals up to 60 minutes and can include targets whose monitoring stopped.
+<img src="03_desktop/Assets/tracertip.png" alt="" width="40" height="40" align="right">
+
+**Windows.** Open `tracertIP.exe` for the native console and enter the Linux node's URL. The same URL opens the web console in a phone or desktop browser.
+
+Both clients can start and stop traces, inspect live latency, and compare hops before and after a route change. History queries cover up to 60 minutes per interval, including retained data from stopped traces.
 
 Save an interval as a capture to preserve it on the Linux node after the rolling history expires. Captures include the node, target, timestamps, round observations and route events. Private captures support a note. Public captures omit the node identity, notes and home-side addresses and ASNs. Download a PDF summary, CSV observations and events, or JSON Lines with the capture and its round and event records. The engine's original logs retain the complete probe packets.
 

@@ -8,6 +8,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <RootNamespace>TracertIP.Desktop</RootNamespace>
     <AssemblyName>tracertIP</AssemblyName>
+    <ApplicationIcon>Assets\tracertip.ico</ApplicationIcon>
     <UseWinUI>true</UseWinUI>
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
@@ -19,6 +20,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <Content Include="Assets\tracertip.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.7.0" />
   </ItemGroup>
 </Project>

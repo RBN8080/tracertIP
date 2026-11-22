@@ -29,6 +29,9 @@ public sealed partial class MainWindow : Window
     public MainWindow(string? requestedNode)
     {
         InitializeComponent();
+        var icon = Path.Combine(AppContext.BaseDirectory, "Assets", "tracertip.ico");
+        if (File.Exists(icon))
+            AppWindow.SetIcon(icon);
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1330, 830));
         timer.Tick += async (_, _) =>
         {
